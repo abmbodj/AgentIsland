@@ -1,0 +1,10 @@
+/core/target/
+/build/
+/macos/*.xcodeproj/
+DerivedData/
+*.xcuserstate
+.DS_Store
+/vscode-ext/node_modules/
+/vscode-ext/*.vsix
+/windows/**/bin/
+/windows/**/obj/

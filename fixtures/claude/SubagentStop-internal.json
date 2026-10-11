@@ -1,0 +1,27 @@
+{
+ "payload": {
+  "session_id": "c8052de2-9489-438a-8218-46c0e1c700bf",
+  "transcript_path": "/Users/ab/.claude/projects/-private-tmp-spike-proj/c8052de2-9489-438a-8218-46c0e1c700bf.jsonl",
+  "cwd": "/private/tmp/spike/proj",
+  "prompt_id": "fd770519-211b-443c-b631-2160d8bc98d6",
+  "permission_mode": "default",
+  "agent_id": "a5de08f91ab53afe2",
+  "agent_type": "",
+  "effort": {
+   "level": "medium"
+  },
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_transcript_path": "/Users/ab/.claude/projects/-private-tmp-spike-proj/c8052de2-9489-438a-8218-46c0e1c700bf/subagents/agent-a5de08f91ab53afe2.jsonl",
+  "background_tasks": [],
+  "session_crons": []
+ },
+ "env": {
+  "TERM_PROGRAM": "tmux",
+  "TERM": "tmux-256color",
+  "CLAUDE_PID": "68105",
+  "TMUX": "/private/tmp/tmux-501/default,68104,0",
+  "__CFBundleIdentifier": "com.t3tools.t3code",
+  "TMUX_PANE": "%0"
+ }
+}

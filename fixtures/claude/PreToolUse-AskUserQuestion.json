@@ -1,0 +1,46 @@
+{
+ "payload": {
+  "session_id": "c8052de2-9489-438a-8218-46c0e1c700bf",
+  "transcript_path": "/Users/ab/.claude/projects/-private-tmp-spike-proj/c8052de2-9489-438a-8218-46c0e1c700bf.jsonl",
+  "cwd": "/private/tmp/spike/proj",
+  "prompt_id": "723f351f-aeaa-4a62-8013-094a645346ab",
+  "permission_mode": "default",
+  "effort": {
+   "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+   "questions": [
+    {
+     "question": "Which color do you prefer?",
+     "header": "Color",
+     "options": [
+      {
+       "label": "Red",
+       "description": "Choose red"
+      },
+      {
+       "label": "Green",
+       "description": "Choose green"
+      },
+      {
+       "label": "Blue",
+       "description": "Choose blue"
+      }
+     ],
+     "multiSelect": false
+    }
+   ]
+  },
+  "tool_use_id": "toolu_013JcKn3mT66y9WaUkrCaZtm"
+ },
+ "env": {
+  "TERM_PROGRAM": "tmux",
+  "TERM": "tmux-256color",
+  "CLAUDE_PID": "68105",
+  "TMUX": "/private/tmp/tmux-501/default,68104,0",
+  "__CFBundleIdentifier": "com.t3tools.t3code",
+  "TMUX_PANE": "%0"
+ }
+}
