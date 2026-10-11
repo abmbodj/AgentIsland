@@ -1,0 +1,35 @@
+{
+  "effortLevel" : "high",
+  "hooks" : {
+    "PostToolUse" : [
+      {
+        "hooks" : [
+          {
+            "command" : "node \"\/Users\/me\/.claude\/hooks\/gsd-context-monitor.js\"",
+            "type" : "command"
+          }
+        ]
+      }
+    ],
+    "SessionStart" : [
+      {
+        "hooks" : [
+          {
+            "command" : "node \"\/Users\/me\/.claude\/hooks\/gsd-check-update.js\"",
+            "type" : "command"
+          }
+        ]
+      }
+    ]
+  },
+  "model" : "opus[1m]",
+  "permissions" : {
+    "allow" : [
+      "Bash(deno run:*)"
+    ]
+  },
+  "statusLine" : {
+    "command" : "node \"\/Users\/me\/.claude\/hooks\/gsd-statusline.js\"",
+    "type" : "command"
+  }
+}
