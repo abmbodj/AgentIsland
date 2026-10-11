@@ -13,7 +13,7 @@ A calm, notch-style status light for local AI coding agents: Claude Code and Cod
 ## Decisions
 
 **Stack & repo**
-- D1: Rust core library (session store, state machine, adapters, socket server, installer, Codex app-server client), plus a tiny static Rust `island-hook` CLI. macOS shell is Swift/AppKit+SwiftUI, linked through UniFFI. The core keeps a stable C ABI for Windows.
+- D1 (implementation note: the shell boundary is a 4-function C ABI exchanging JSON, `core/island-core/include/island_core.h`, used by Swift now and C# later; this replaced UniFFI, which has no first-party C# binding): Rust core library (session store, state machine, adapters, socket server, installer, Codex app-server client), plus a tiny static Rust `island-hook` CLI. macOS shell is Swift/AppKit+SwiftUI, linked through UniFFI. The core keeps a stable C ABI for Windows.
 - D2/D36: `~/Desktop/AgentShelf2` is a real git repo, with a **public** GitHub repo `abmbodj/AgentShelf2`. Commits go straight to main. **I pause for the user's OK after each slice.**
 - D5: At slice 0, `brew install rustup tmux xcodegen` and `brew install --cask iterm2 ghostty`. rustup gets the aarch64 and x86_64 darwin targets.
 - D6: macOS 14+. Liquid Glass on 26+, NSVisualEffectView fallback.
@@ -76,7 +76,7 @@ Subagents (SubagentStart/Stop, agent_id) are children of the session and never c
   - The overlay is never key unless summoned. Cards accept first-mouse clicks without taking focus.
   - The summon hotkey ⌥⌘I (rebindable; Ctrl+Alt+I on Windows) makes the panel key without activating the app. In summoned mode, ⌘Y / ⌘N / ⌘1–9, J/K, free text and Esc all work, and focus returns to the previous app afterwards.
   - A click answer turns the button into "Undo" with a 2 s depleting ring. Esc undo works only when summoned.
-- D35: If the session's own tab is frontmost, the hook returns immediately so the native prompt handles it. The pill shows the amber wing only, with no expansion and no chime. If the user switches away while it's still pending, the card appears: inline for Codex-daemon sessions, or handoff for Claude, depending on the result of the slice-0 race spike.
+- D35 (revised after the slice-0 spike, see docs/spike-slice0-claude-permission-race.md): the approval hook always blocks; if the session's own tab is frontmost the island only skips auto-expand and chime, and Claude answers stay inline after switching away. Original text: If the session's own tab is frontmost, the hook returns immediately so the native prompt handles it. The pill shows the amber wing only, with no expansion and no chime. If the user switches away while it's still pending, the card appears: inline for Codex-daemon sessions, or handoff for Claude, depending on the result of the slice-0 race spike.
 - D21: Sound. The Needs-input chime is ON by default, and the Finished sound is also ON by default, each with its own toggle. A picker offers macOS system sounds, plus a volume control. Sounds are suppressed when that session's app or tab is frontmost, and limited to one per 10 s.
 - D34: First run opens one regular window listing every change, each with a checkbox and an expandable unified diff:
   - Claude: hooks and the statusLine wrapper

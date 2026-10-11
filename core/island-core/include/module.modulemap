@@ -1,0 +1,5 @@
+module IslandCore {
+    header "island_core.h"
+    link "island_core"
+    export *
+}

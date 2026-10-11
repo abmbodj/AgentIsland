@@ -6,6 +6,19 @@ Fully local: no accounts, no telemetry. The only network request is the optional
 
 Status: under construction. See [`docs/PLAN.md`](docs/PLAN.md).
 
+## Build
+
+Requires Xcode 26+, Rust (`brew install rustup && rustup default stable`), XcodeGen.
+
+```sh
+cd core && cargo test          # state machine, installer, E2E hook→socket→core
+scripts/install.sh             # Release build signed with your Apple Development cert → /Applications
+scripts/release.sh 0.1.0 --dry-run   # signed, notarized (with Developer ID) DMG + Sparkle appcast
+```
+
+Debug aids: `~/Library/Application Support/AgentIsland/bin/island-hook status` prints the live session snapshot.
+Debug builds honour `AGENT_ISLAND_HOME` (scratch home for integrations) and `AGENT_ISLAND_RENDER=/tmp/pill.png`.
+
 ## Layout
 
 - `core/` Rust: session store, state machine, agent adapters, local socket server, installer, `island-hook` CLI.

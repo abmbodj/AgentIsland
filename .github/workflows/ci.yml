@@ -1,0 +1,14 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust tests (unit + installer + E2E hook→socket→core)
+        run: cd core && cargo test
+      - name: Build macOS app (unsigned)
+        run: |
+          brew install xcodegen
+          cd macos && xcodegen generate
+          xcodebuild -project AgentIsland.xcodeproj -scheme AgentIsland -configuration Debug build CODE_SIGNING_ALLOWED=NO -quiet
