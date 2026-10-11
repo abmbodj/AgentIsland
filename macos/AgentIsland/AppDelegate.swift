@@ -33,7 +33,7 @@ final class Updater {
 
 @main
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var island: IslandController!
+    private var islands: [IslandController] = []
     private var statusItem: NSStatusItem!
     private var windows: [String: NSWindow] = [:]
     private let pauseItem = NSMenuItem(title: "Pause Monitoring", action: #selector(togglePause), keyEquivalent: "")
@@ -47,9 +47,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        island = IslandController()
+        rebuildIslands()
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            if DisplayChoice.raw != "active" { self?.rebuildIslands() }
+        }
+        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            if self?.displayChoice != DisplayChoice.raw { self?.rebuildIslands() }
+        }
         CoreBridge.shared.onSnapshot = { [weak self] snap in
-            self?.island.update(snap)
+            self?.islands.forEach { $0.update(snap) }
             self?.pauseItem.state = snap.paused ? .on : .off
         }
         do {
@@ -68,6 +74,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !Preferences.setupShown {
             showSetup()
         }
+    }
+
+    private var displayChoice = ""
+
+    /// One island per target display (D22).
+    private func rebuildIslands() {
+        displayChoice = DisplayChoice.raw
+        islands.forEach { $0.close() }
+        islands = DisplayChoice.targets().map { IslandController(screen: $0) }
+        islands.forEach { $0.update(CoreBridge.shared.latest) }
     }
 
     private func setUpStatusItem() {

@@ -40,6 +40,9 @@ targets:
         script: '"$SRCROOT/../scripts/build-core.sh"'
         basedOnDependencyAnalysis: false
     postBuildScripts:
+      - name: Package editor extension
+        script: '"$SRCROOT/../scripts/build-vsix.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/agent-island-jump.vsix"'
+        basedOnDependencyAnalysis: false
       - name: Embed island-hook
         script: |
           set -e

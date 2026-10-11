@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 
 /// Borderless, non-activating overlay. Never key, never main, never in the Dock / ⌘Tab / Mission Control.
 final class IslandPanel: NSPanel {
@@ -21,14 +22,12 @@ final class IslandPanel: NSPanel {
 }
 
 /// Where the island lives on a given screen.
-struct IslandGeometry {
-    let screen: NSScreen
+struct IslandGeometry: Equatable {
     /// The hardware notch (screen coordinates); zero width on displays without one.
     let notch: CGRect
     var hasNotch: Bool { notch.width > 0 }
 
     init(screen: NSScreen) {
-        self.screen = screen
         let f = screen.frame
         if let l = screen.auxiliaryTopLeftArea, let r = screen.auxiliaryTopRightArea, screen.safeAreaInsets.top > 0 {
             let h = screen.safeAreaInsets.top
@@ -41,71 +40,276 @@ struct IslandGeometry {
     }
 }
 
-/// Owns the panel, follows the active screen and renders snapshots into the pill.
+/// Which display(s) show the island (D22). Stored as "active" | "builtin" | "all" | "<display id>".
+enum DisplayChoice {
+    static var raw: String { UserDefaults.standard.string(forKey: "display") ?? "active" }
+
+    static func id(_ s: NSScreen) -> String {
+        (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.stringValue ?? ""
+    }
+
+    static var builtin: NSScreen? {
+        NSScreen.screens.first { CGDisplayIsBuiltin(CGDirectDisplayID(UInt32(id($0)) ?? 0)) != 0 }
+    }
+
+    /// Screens to show islands on right now. One entry (nil = follow active) unless "all".
+    static func targets() -> [NSScreen?] {
+        switch raw {
+        case "all": return NSScreen.screens
+        case "active": return [nil]
+        case "builtin": return [builtin ?? NSScreen.screens.first]
+        case let id: return [NSScreen.screens.first { Self.id($0) == id } ?? builtin ?? NSScreen.screens.first]
+        }
+    }
+}
+
+/// Owns one overlay: decides expanded/collapsed, sizes the window to the island, routes clicks.
 final class IslandController {
+    /// nil = follow the active screen.
+    private let fixedScreen: NSScreen?
     private let panel = IslandPanel()
-    private let pill = PillView()
+    let model = PanelModel()
+    private lazy var view = IslandView(model: model)
     private var geometry: IslandGeometry?
     private var snapshot = Snapshot()
-    /// Room on each side of the notch for wings.
-    private let capacity: CGFloat = 200
 
-    init() {
-        panel.contentView = pill
+    // Expansion state (D23).
+    private var expanded = false
+    private var pinned = false
+    private var autoOpened = false
+    private var pointerInside = false
+    private var openTimer: DispatchWorkItem?
+    private var closeTimer: DispatchWorkItem?
+    private var viewedTimer: DispatchWorkItem?
+    private var monitors: [Any] = []
+    private var observers: [(NotificationCenter, NSObjectProtocol)] = []
+    private var bound: Set<String> = []
+    private var heightSink: AnyCancellable?
+
+    var hoverDelay: TimeInterval { UserDefaults.standard.object(forKey: "hoverDelay") as? Double ?? 0.35 }
+    var autoExpand: Bool { UserDefaults.standard.object(forKey: "autoExpand") as? Bool ?? true }
+
+    init(screen: NSScreen? = nil) {
+        fixedScreen = screen
+        panel.contentView = view
+        view.onClick = { [weak self] in self?.clicked() }
+        heightSink = model.$contentHeight.removeDuplicates().dropFirst().sink { [weak self] _ in
+            DispatchQueue.main.async { if self?.expanded == true { self?.render(animated: true) } }
+        }
+        model.onJump = { [weak self] s in self?.jump(s) }
+
         let nc = NSWorkspace.shared.notificationCenter
-        nc.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.reposition() }
-        nc.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in self?.render(animated: false) }
-        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in self?.reposition() }
+        observers.append((nc, nc.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.reposition() }))
+        observers.append((nc, nc.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in self?.render(animated: false) }))
+        observers.append((NotificationCenter.default, NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in self?.reposition() }))
+
+        // The window only ever covers the visible island, so hover comes from a tracking area and
+        // the rest of the screen is untouched. Only clicks elsewhere are observed (to close a pinned panel).
+        view.onHover = { [weak self] inside in self?.hover(inside) }
+        monitors.append(NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in self?.clickedOutside() } as Any)
         reposition()
+        #if DEBUG
+        let dnc = DistributedNotificationCenter.default()
+        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.jump"), object: nil, queue: .main) { [weak self] n in
+            if let id = n.object as? String, let s = self?.snapshot.sessions.first(where: { $0.id == id }) { self?.jump(s) }
+        }))
+        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.openGroup"), object: nil, queue: .main) { [weak self] n in
+            if let id = n.object as? String { self?.model.openGroups.insert(id) }
+        }))
+        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.expand"), object: nil, queue: .main) { [weak self] n in
+            self?.setExpanded((n.object as? String) != "collapse", pinned: true)
+        }))
+        #endif
+    }
+
+    func close() {
+        monitors.forEach(NSEvent.removeMonitor)
+        monitors = []
+        observers.forEach { $0.0.removeObserver($0.1) }
+        observers = []
+        panel.orderOut(nil)
     }
 
     func update(_ snap: Snapshot) {
+        let previousAttention = snapshot.attention
+        let gone = Set(snapshot.sessions.map(\.id)).subtracting(snap.sessions.map(\.id))
+        if !gone.isEmpty {
+            Jumper.forgetGhostty(gone)
+            bound.subtract(gone)
+            model.openGroups.subtract(gone)
+        }
         snapshot = snap
+        model.snapshot = snap
+        for s in snap.sessions where s.terminal.program == "ghostty" && s.terminal.tmux == nil && !bound.contains(s.id) {
+            bound.insert(s.id)
+            Jumper.bindGhostty(s)
+        }
+        if snap.attention > previousAttention && autoExpand && !snap.paused {
+            autoOpened = true
+            setExpanded(true, pinned: pinned)
+            return
+        }
+        if snap.attention == 0 && autoOpened {
+            autoOpened = false
+            if !pinned && !pointerInside { setExpanded(false, pinned: false); return }
+        }
         render(animated: true)
+        if expanded { scheduleViewed() }
     }
 
+    // MARK: Expansion
+
+    private func setExpanded(_ on: Bool, pinned pin: Bool) {
+        openTimer?.cancel()
+        closeTimer?.cancel()
+        pinned = on && pin
+        if !on { autoOpened = false }
+        guard on != expanded else { render(animated: true); return }
+        expanded = on
+        render(animated: true)
+        if on { scheduleViewed() } else { viewedTimer?.cancel() }
+    }
+
+    private func clicked() {
+        if expanded {
+            // Clicking the island itself (not a row) closes it.
+            setExpanded(false, pinned: false)
+        } else {
+            setExpanded(true, pinned: true)
+        }
+    }
+
+    private func clickedOutside() {
+        if expanded && !pointerInside {
+            setExpanded(false, pinned: false)
+        }
+    }
+
+    private func hover(_ inside: Bool) {
+        guard inside != pointerInside, !snapshot.paused || !inside else { return }
+        pointerInside = inside
+        if inside {
+            closeTimer?.cancel()
+            if !expanded {
+                let w = DispatchWorkItem { [weak self] in self?.setExpanded(true, pinned: false) }
+                openTimer = w
+                DispatchQueue.main.asyncAfter(deadline: .now() + hoverDelay, execute: w)
+            }
+        } else {
+            openTimer?.cancel()
+            if expanded && !pinned && !autoOpened {
+                let w = DispatchWorkItem { [weak self] in self?.setExpanded(false, pinned: false) }
+                closeTimer = w
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: w)
+            }
+        }
+    }
+
+    /// Finished turns count as seen once their rows have been on screen for 1.5 s (D17).
+    private func scheduleViewed() {
+        viewedTimer?.cancel()
+        guard snapshot.sessions.contains(where: { $0.state == .finished }) else { return }
+        let w = DispatchWorkItem { [weak self] in
+            guard let self, self.expanded else { return }
+            for s in self.snapshot.sessions where s.state == .finished {
+                CoreBridge.shared.send(["type": "viewed", "agent": s.agent, "id": s.id])
+            }
+        }
+        viewedTimer = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: w)
+    }
+
+    private func jump(_ s: SessionInfo) {
+        CoreBridge.shared.send(["type": "viewed", "agent": s.agent, "id": s.id])
+        Jumper.jump(s) { [weak self] hint in
+            guard let self else { return }
+            #if DEBUG
+            if let path = ProcessInfo.processInfo.environment["AGENT_ISLAND_RENDER"],
+               let h = FileHandle(forWritingAtPath: path + ".jumps") ?? { FileManager.default.createFile(atPath: path + ".jumps", contents: nil); return FileHandle(forWritingAtPath: path + ".jumps") }() {
+                h.seekToEndOfFile()
+                h.write("\(s.id) \(hint ?? "ok")\n".data(using: .utf8)!)
+                try? h.close()
+            }
+            #endif
+            self.model.hint[s.id] = hint
+            if hint == nil {
+                self.setExpanded(false, pinned: false)
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6) { self.model.hint[s.id] = nil }
+            }
+        }
+    }
+
+    // MARK: Layout
+
     private func reposition() {
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        guard let screen = fixedScreen ?? NSScreen.main ?? NSScreen.screens.first else { return }
         let g = IslandGeometry(screen: screen)
-        if g.notch != geometry?.notch {
-            geometry = g
-            let w = g.notch.width + capacity * 2
-            panel.setFrame(CGRect(x: g.notch.midX - w / 2, y: g.notch.minY, width: w, height: g.notch.height), display: false)
-            render(animated: false)
+        guard g != geometry else { return }
+        geometry = g
+        // Envelope: the drawing space for wings and the dropped-down panel, anchored at the screen top.
+        let w = max(g.notch.width + 440, IslandView.panelWidth + 80)
+        let h = g.notch.height + 460
+        envelopeOrigin = CGPoint(x: g.notch.midX - w / 2, y: screen.frame.maxY - h)
+        view.envelope = CGSize(width: w, height: h)
+        view.configure(notchWidth: g.notch.width, notchHeight: g.notch.height, hasNotch: g.hasNotch)
+        windowRect = .zero
+        render(animated: false)
+    }
+
+    private var envelopeOrigin = CGPoint.zero
+    private var windowRect = CGRect.zero
+    private var shrinkTimer: DispatchWorkItem?
+
+    /// Size the window to exactly the island (envelope coords); during animations, to the union of
+    /// the old and new shapes, shrinking once the spring settles.
+    private func fitWindow(to target: CGRect, animated: Bool) {
+        shrinkTimer?.cancel()
+        guard !target.isEmpty else {
+            panel.orderOut(nil)
+            windowRect = .zero
+            return
+        }
+        let r = (animated && !windowRect.isEmpty ? windowRect.union(target) : target).integral
+        if r != windowRect {
+            windowRect = r
+            panel.setFrame(r.offsetBy(dx: envelopeOrigin.x, dy: envelopeOrigin.y), display: false)
+            view.setBoundsOrigin(r.origin)
+            view.needsLayout = true
+        }
+        panel.orderFrontRegardless()
+        if r != target.integral {
+            let w = DispatchWorkItem { [weak self] in self?.fitWindow(to: target, animated: false) }
+            shrinkTimer = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: w)
         }
     }
 
     private func render(animated: Bool) {
-        guard let g = geometry else { return }
-        let visible = !snapshot.paused && !snapshot.sessions.isEmpty
-        pill.configure(notchWidth: g.notch.width, hasNotch: g.hasNotch)
-        pill.update(sessions: visible ? snapshot.sessions : [], attention: visible ? snapshot.attention : 0, animated: animated && !Theme.reduceMotion)
+        view.render(snapshot: snapshot, expanded: expanded, animated: animated)
+        fitWindow(to: view.islandRect, animated: animated)
         #if DEBUG
         debugRender()
         #endif
-        if visible || g.hasNotch {
-            panel.orderFrontRegardless()
-        } else {
-            panel.orderOut(nil)
-        }
     }
 
     #if DEBUG
-    /// AGENT_ISLAND_RENDER=/path.png writes the pill (over a light menu-bar stand-in) after each render.
+    /// AGENT_ISLAND_RENDER=/path.png writes the island (over a light stand-in backdrop) after each render.
     private func debugRender() {
-        guard let path = ProcessInfo.processInfo.environment["AGENT_ISLAND_RENDER"], let layer = pill.layer else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [pill] in
-            let scale: CGFloat = 2
-            let size = pill.bounds.size
-            guard let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale), bitsPerComponent: 8,
-                                      bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-            else { return }
-            ctx.scaleBy(x: scale, y: scale)
-            ctx.setFillColor(NSColor(white: 0.93, alpha: 1).cgColor)
-            ctx.fill(CGRect(origin: .zero, size: size))
-            layer.render(in: ctx)
-            guard let img = ctx.makeImage() else { return }
-            try? NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        guard let path = ProcessInfo.processInfo.environment["AGENT_ISLAND_RENDER"] else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [view] in
+            let rect = view.islandRect.insetBy(dx: -30, dy: -12).intersection(view.bounds)
+            guard rect.width > 0, let rep = view.bitmapImageRepForCachingDisplay(in: rect) else { return }
+            view.cacheDisplay(in: rect, to: rep)
+            let img = NSImage(size: rect.size)
+            img.lockFocus()
+            NSColor(white: 0.62, alpha: 1).setFill()
+            rect.offsetBy(dx: -rect.minX, dy: -rect.minY).fill()
+            rep.draw(in: CGRect(origin: .zero, size: rect.size))
+            img.unlockFocus()
+            if let tiff = img.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                try? png.write(to: URL(fileURLWithPath: path))
+            }
         }
     }
     #endif

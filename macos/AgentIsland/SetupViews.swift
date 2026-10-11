@@ -85,7 +85,9 @@ struct SetupView: View {
     @State private var selected: Set<String> = []
     @State private var openAtLogin = true
     @State private var autoUpdate = true
+    @State private var editorJump = true
     @State private var error: String?
+    private let editors = EditorExtension.available
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -107,6 +109,15 @@ struct SetupView: View {
                     isOn: Binding(get: { selected.contains(item.id) }, set: { on in
                         if on { selected.insert(item.id) } else { selected.remove(item.id) }
                     })
+                )
+            }
+
+            if !editors.isEmpty && !EditorExtension.anyInstalled {
+                ChangeRow(
+                    title: "Exact terminal jump in \(editors.map(\.name).joined(separator: " and "))",
+                    detail: "Installs the small Agent Island Jump extension (\(EditorExtension.id)) so a click can show the right integrated terminal.",
+                    diff: nil,
+                    isOn: $editorJump
                 )
             }
 
@@ -144,6 +155,9 @@ struct SetupView: View {
     private func apply() {
         do {
             _ = try CoreBridge.shared.call(["op": "applyInstall", "ids": Array(selected)])
+            if editorJump && !editors.isEmpty && !EditorExtension.anyInstalled {
+                try EditorExtension.install()
+            }
             Preferences.openAtLogin = openAtLogin
             Updater.shared.automaticChecks = autoUpdate
             onFinish()
@@ -159,12 +173,20 @@ struct UninstallView: View {
     var onFinish: () -> Void
     @State private var items: [UninstallItem] = []
     @State private var error: String?
+    private let hasExtension = EditorExtension.anyInstalled
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Remove Agent Island's integrations").font(.title2.weight(.semibold))
-            if items.isEmpty {
+            if items.isEmpty && !hasExtension {
                 Text("Nothing is installed.").foregroundStyle(.secondary)
+            }
+            if hasExtension {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Agent Island Jump extension").font(.body.weight(.medium))
+                    Text("Uninstalled from \(EditorExtension.available.filter { EditorExtension.installed(in: $0.app) }.map(\.name).joined(separator: " and ")).")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             ForEach(items) { item in
                 VStack(alignment: .leading, spacing: 6) {
@@ -190,7 +212,7 @@ struct UninstallView: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Remove") { apply("surgical") }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(items.isEmpty)
+                    .disabled(items.isEmpty && !hasExtension)
             }
         }
         .padding(24)
@@ -203,6 +225,7 @@ struct UninstallView: View {
     private func apply(_ mode: String) {
         do {
             _ = try CoreBridge.shared.call(["op": "applyUninstall", "mode": mode])
+            EditorExtension.uninstall()
             onFinish()
         } catch {
             self.error = error.localizedDescription
@@ -220,6 +243,9 @@ struct SettingsView: View {
     @State private var openAtLogin = Preferences.openAtLogin
     @State private var autoUpdate = Updater.shared.automaticChecks
     @State private var connected = Preferences.claudeConnected
+    @AppStorage("autoExpand") private var autoExpand = true
+    @AppStorage("hoverDelay") private var hoverDelay = 0.35
+    @AppStorage("display") private var display = "active"
 
     var body: some View {
         Form {
@@ -228,6 +254,23 @@ struct SettingsView: View {
                     .onChange(of: openAtLogin) { _, v in Preferences.openAtLogin = v }
                 Toggle("Check for updates automatically", isOn: $autoUpdate)
                     .onChange(of: autoUpdate) { _, v in Updater.shared.automaticChecks = v }
+            }
+            Section("Island") {
+                Picker("Show on", selection: $display) {
+                    Text("Active display").tag("active")
+                    Text("Built-in display").tag("builtin")
+                    ForEach(NSScreen.screens, id: \.localizedName) { s in
+                        Text(s.localizedName).tag(DisplayChoice.id(s))
+                    }
+                    Text("All displays").tag("all")
+                }
+                Toggle("Expand when an agent needs you", isOn: $autoExpand)
+                LabeledContent("Hover delay") {
+                    HStack {
+                        Slider(value: $hoverDelay, in: 0...1, step: 0.05).frame(width: 160)
+                        Text("\(Int(hoverDelay * 1000)) ms").monospacedDigit().foregroundStyle(.secondary).frame(width: 60, alignment: .trailing)
+                    }
+                }
             }
             Section("Agents") {
                 LabeledContent("Claude Code") {
