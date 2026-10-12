@@ -44,6 +44,55 @@ enum Jumper {
         }
     }
 
+    // MARK: Looking at it already? (D35: no auto-expand, no chime)
+
+    /// Whether the user is looking at this session right now: its app is frontmost and, where the
+    /// terminal can tell us, its exact tab/pane is the selected one.
+    static func isLookingAt(_ s: SessionInfo, completion: @escaping (Bool) -> Void) {
+        let front = NSWorkspace.shared.frontmostApplication
+        queue.async {
+            let r = looking(s, front: front)
+            DispatchQueue.main.async { completion(r) }
+        }
+    }
+
+    private static func looking(_ s: SessionInfo, front: NSRunningApplication?) -> Bool {
+        let t = s.terminal
+        guard let frontID = front?.bundleIdentifier else { return false }
+        if let pane = t.tmuxPane, let env = t.tmux, let tmux = tmuxPath {
+            let sock = String(env.split(separator: ",").first ?? "")
+            let active = run(tmux, ["-S", sock, "display-message", "-p", "-t", pane, "#{pane_active}#{window_active}#{session_attached}"])?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard active?.hasPrefix("11") == true, active != "110" else { return false }
+            let client = (run(tmux, ["-S", sock, "list-clients", "-F", "#{client_tty}\t#{client_pid}"]) ?? "")
+                .split(separator: "\n").first.map { $0.split(separator: "\t").map(String.init) }
+            guard let client, client.count == 2, let app = ancestorApp(of: Int32(client[1]) ?? 0) else { return false }
+            return app.bundleIdentifier == frontID && frontTabMatches(App(rawValue: frontID), tty: client[0], uuid: nil, ghosttyID: nil)
+        }
+        let bundle = t.bundleId ?? bundleFor(program: t.program)
+        guard bundle == frontID else { return false }
+        let tty = t.tty.map { $0.hasPrefix("/dev/") ? $0 : "/dev/" + $0 }
+        let uuid = t.itermSession?.split(separator: ":").last.map(String.init)
+        return frontTabMatches(App(rawValue: frontID), tty: tty, uuid: uuid, ghosttyID: ghosttyBindings[s.id])
+    }
+
+    /// Precise check where the terminal exposes it; app-level "frontmost" elsewhere (editors, desktop apps).
+    private static func frontTabMatches(_ app: App?, tty: String?, uuid: String?, ghosttyID: String?) -> Bool {
+        switch app {
+        case .terminal:
+            guard let tty else { return true }
+            return appleScript("tell application id \"com.apple.Terminal\" to get tty of selected tab of front window").result?.stringValue == tty
+        case .iterm:
+            let r = appleScript("tell application id \"com.googlecode.iterm2\" to get {unique id, tty} of current session of current window").result
+            return r?.atIndex(1)?.stringValue == uuid || r?.atIndex(2)?.stringValue == tty
+        case .ghostty:
+            guard let ghosttyID else { return true }
+            return appleScript("tell application id \"com.mitchellh.ghostty\" to get id of focused terminal of selected tab of front window").result?.stringValue == ghosttyID
+        default:
+            return true
+        }
+    }
+
     // MARK: tmux
 
     private static var tmuxPath: String? {

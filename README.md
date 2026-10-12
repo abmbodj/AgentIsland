@@ -6,6 +6,12 @@ Fully local: no accounts, no telemetry. The only network request is the optional
 
 Status: under construction. See [`docs/PLAN.md`](docs/PLAN.md).
 
+## Using it
+
+- Hover the notch (or click it) to see sessions; click a row to jump to its terminal tab or pane.
+- When an agent needs you the island opens a card: **Allow / Deny / Allow for session**, or the numbered answers to its question. Every response has a 2-second undo.
+- **⌥⌘I** gives the island the keyboard: ⌘Y allow, ⌘N deny, ⌘1–9 answer, J/K move, Esc undo or close. Rebind it in Settings.
+
 ## Build
 
 Requires Xcode 26+, Rust (`brew install rustup && rustup default stable`), XcodeGen.

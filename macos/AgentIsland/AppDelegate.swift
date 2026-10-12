@@ -54,7 +54,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             if self?.displayChoice != DisplayChoice.raw { self?.rebuildIslands() }
         }
+        HotKey.shared.onPress = { [weak self] in self?.islands.first?.toggleSummon() }
+        HotKey.shared.register()
         CoreBridge.shared.onSnapshot = { [weak self] snap in
+            self?.playCues(old: self?.lastSnapshot ?? Snapshot(), new: snap)
+            self?.lastSnapshot = snap
             self?.islands.forEach { $0.update(snap) }
             self?.pauseItem.state = snap.paused ? .on : .off
         }
@@ -77,6 +81,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var displayChoice = ""
+    private var lastSnapshot = Snapshot()
+
+    /// Sound cues on transitions into Needs input / Finished, unless you're looking at that session.
+    private func playCues(old: Snapshot, new: Snapshot) {
+        guard !new.paused else { return }
+        let oldPending = Set(old.sessions.flatMap { $0.pending.map(\.id) })
+        let oldState = Dictionary(old.sessions.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
+        for s in new.sessions {
+            let kind: Sounds.Kind?
+            if s.pending.contains(where: { !oldPending.contains($0.id) }) {
+                kind = .needsInput
+            } else if s.state == .finished && oldState[s.id] != nil && oldState[s.id] != .finished {
+                kind = .finished
+            } else {
+                kind = nil
+            }
+            guard let kind, Sounds.enabled(kind) else { continue }
+            Jumper.isLookingAt(s) { looking in if !looking { Sounds.play(kind) } }
+        }
+    }
 
     /// One island per target display (D22).
     private func rebuildIslands() {

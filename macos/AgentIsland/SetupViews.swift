@@ -246,6 +246,14 @@ struct SettingsView: View {
     @AppStorage("autoExpand") private var autoExpand = true
     @AppStorage("hoverDelay") private var hoverDelay = 0.35
     @AppStorage("display") private var display = "active"
+    @AppStorage("chimeNeedsInput") private var chimeNeedsInput = true
+    @AppStorage("chimeFinished") private var chimeFinished = true
+    @AppStorage("soundNeedsInput") private var soundNeedsInput = "Glass"
+    @AppStorage("soundFinished") private var soundFinished = "Tink"
+    @AppStorage("soundVolume") private var soundVolume = 0.6
+    @State private var hotKey = HotKey.shared.display
+    @State private var recording = false
+    @State private var recorder: Any?
 
     var body: some View {
         Form {
@@ -272,6 +280,21 @@ struct SettingsView: View {
                     }
                 }
             }
+            Section("Keyboard") {
+                LabeledContent("Summon the island") {
+                    Button(recording ? "Press a shortcut…" : hotKey) { record() }
+                        .help("Opens the island with keyboard focus: ⌘Y allow, ⌘N deny, ⌘1–9 answer, J/K move, Esc undo or close")
+                }
+            }
+            Section("Sounds") {
+                soundRow("When an agent needs you", on: $chimeNeedsInput, name: $soundNeedsInput, kind: .needsInput)
+                soundRow("When a turn finishes", on: $chimeFinished, name: $soundFinished, kind: .finished)
+                LabeledContent("Volume") {
+                    Slider(value: $soundVolume, in: 0...1).frame(width: 160)
+                }
+                Text("Silent when you're already looking at that session, and never more than once every 10 seconds.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Agents") {
                 LabeledContent("Claude Code") {
                     HStack {
@@ -287,5 +310,41 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 460)
         .onAppear { connected = Preferences.claudeConnected }
+    }
+
+    private func soundRow(_ title: String, on: Binding<Bool>, name: Binding<String>, kind: Sounds.Kind) -> some View {
+        HStack {
+            Toggle(title, isOn: on)
+            Spacer()
+            Picker("", selection: name) {
+                ForEach(Sounds.choices, id: \.self) { Text($0).tag($0) }
+            }
+            .labelsHidden()
+            .frame(width: 120)
+            .disabled(!on.wrappedValue)
+            Button { Sounds.play(kind, preview: true) } label: { Image(systemName: "speaker.wave.2") }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Preview sound")
+        }
+    }
+
+    /// Capture the next key chord (must include ⌘, ⌥ or ⌃) as the summon shortcut.
+    private func record() {
+        recording = true
+        recorder = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
+            let mods = HotKey.carbonModifiers(e.modifierFlags)
+            if e.keyCode == 53 { stop(); return nil } // Esc cancels
+            guard e.modifierFlags.intersection([.command, .option, .control]).isEmpty == false else { return nil }
+            HotKey.shared.set(keyCode: UInt32(e.keyCode), modifiers: mods)
+            hotKey = HotKey.shared.display
+            stop()
+            return nil
+        }
+    }
+
+    private func stop() {
+        recording = false
+        if let r = recorder { NSEvent.removeMonitor(r) }
+        recorder = nil
     }
 }

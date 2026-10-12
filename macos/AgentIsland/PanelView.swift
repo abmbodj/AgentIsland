@@ -11,7 +11,129 @@ final class PanelModel: ObservableObject {
     @Published var contentHeight: CGFloat = 0
     /// Only tick the elapsed-time clock while the panel is open.
     @Published var isOpen = false
+    /// Keyboard mode (⌥⌘I): the panel is key, so shortcuts and typing work.
+    @Published var summoned = false
+    /// Which waiting card is shown, as an index into `cards`.
+    @Published var cardIndex = 0
+    /// A response inside its 2 s undo window.
+    @Published var staged: Staged?
+    /// Brief confirmation after a response is sent ("Approved").
+    @Published var receipt: String?
+    /// Multi-select picks and multi-question progress, per card.
+    @Published var picks: [UInt64: Set<String>] = [:]
+    @Published var answered: [UInt64: [String: String]] = [:]
+    @Published var freeText = ""
     var onJump: (SessionInfo) -> Void = { _ in }
+    /// Ask the controller to enter keyboard mode (e.g. to type a free-text answer).
+    var onSummon: () -> Void = {}
+    /// A response was committed (after the undo window).
+    var onCommitted: () -> Void = {}
+
+    struct Staged: Equatable {
+        let id: UInt64
+        let button: String
+        let decision: String?
+        let answers: [String: String]?
+        let receipt: String
+        let started: Date
+    }
+
+    static let undoWindow: TimeInterval = 2
+
+    /// Waiting items across sessions, oldest first.
+    var cards: [(session: SessionInfo, item: Attention)] {
+        snapshot.sessions.flatMap { s in s.pending.map { (s, $0) } }.sorted { $0.item.since < $1.item.since }
+    }
+
+    var current: (session: SessionInfo, item: Attention)? {
+        let c = cards
+        return c.isEmpty ? nil : c[min(cardIndex, c.count - 1)]
+    }
+
+    func move(_ delta: Int) {
+        let n = cards.count
+        guard n > 1, staged == nil else { return }
+        cardIndex = (min(cardIndex, n - 1) + delta + n) % n
+        freeText = ""
+    }
+
+    /// Start the undo window for a response; it is sent when the window closes.
+    func stage(_ item: Attention, button: String, decision: String? = nil, answers: [String: String]? = nil, receipt: String) {
+        guard staged == nil else { return }
+        let s = Staged(id: item.id, button: button, decision: decision, answers: answers, receipt: receipt, started: Date())
+        staged = s
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.undoWindow) { [weak self] in
+            guard let self, self.staged == s else { return }
+            self.staged = nil
+            var cmd: [String: Any] = ["type": "answer", "id": s.id]
+            if let d = s.decision { cmd["decision"] = d }
+            if let a = s.answers { cmd["answers"] = a }
+            CoreBridge.shared.send(cmd)
+            self.answered[s.id] = nil
+            self.picks[s.id] = nil
+            self.freeText = ""
+            self.receipt = s.receipt
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                if self?.receipt == s.receipt { self?.receipt = nil }
+            }
+            self.onCommitted()
+        }
+    }
+
+    func undo() {
+        staged = nil
+    }
+
+    // MARK: Responses
+
+    func allow(_ a: Attention) { stage(a, button: "allow", decision: "allow", receipt: "Approved") }
+    func deny(_ a: Attention) { stage(a, button: "deny", decision: "deny", receipt: "Denied") }
+    func allowSession(_ a: Attention) {
+        guard a.canAllowSession else { return }
+        stage(a, button: "session", decision: "allowSession", receipt: "Allowed for this session")
+    }
+
+    /// Choose option `n` (0-based) of the card's current question.
+    func pick(_ a: Attention, option n: Int) {
+        guard let q = question(of: a), n < q.options.count, staged == nil else { return }
+        let label = q.options[n].label
+        if q.multiSelect {
+            var p = picks[a.id] ?? []
+            if p.contains(label) { p.remove(label) } else { p.insert(label) }
+            picks[a.id] = p
+        } else {
+            record(a, q, label, button: "option\(n)")
+        }
+    }
+
+    func submitPicks(_ a: Attention) {
+        guard let q = question(of: a), let p = picks[a.id], !p.isEmpty else { return }
+        record(a, q, q.options.map(\.label).filter(p.contains).joined(separator: ", "), button: "submit")
+    }
+
+    func submitFreeText(_ a: Attention) {
+        let text = freeText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let q = question(of: a), !text.isEmpty else { return }
+        record(a, q, text, button: "other")
+    }
+
+    /// The question still to be answered on a (possibly multi-question) card.
+    func question(of a: Attention) -> Question? {
+        let done = answered[a.id] ?? [:]
+        return a.questions.first { done[$0.question] == nil }
+    }
+
+    private func record(_ a: Attention, _ q: Question, _ value: String, button: String) {
+        var done = answered[a.id] ?? [:]
+        done[q.question] = value
+        freeText = ""
+        if a.questions.allSatisfy({ done[$0.question] != nil }) {
+            answered[a.id] = done
+            stage(a, button: button, answers: done, receipt: "Answered")
+        } else {
+            answered[a.id] = done
+        }
+    }
 }
 
 enum Fmt {
@@ -64,8 +186,10 @@ struct PanelView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
                 } else if model.snapshot.sessions.count > 7 {
-                    ScrollView { rows(ctx.date) }.frame(height: 7 * 47)
+                    CardArea(model: model)
+                    ScrollView { rows(ctx.date) }.frame(height: 5 * 47)
                 } else {
+                    CardArea(model: model)
                     rows(ctx.date)
                 }
                 UsageStrip(usage: model.snapshot.usage, now: ctx.date)

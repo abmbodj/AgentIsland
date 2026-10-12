@@ -28,10 +28,38 @@ enum SessionState: String, Decodable {
     case working, idle, needsInput, finished, ended, error, stale
 }
 
-struct Attention: Decodable, Equatable {
+struct Attention: Decodable, Equatable, Identifiable {
     var id: UInt64
     var tool: String
     var since: Int64
+    /// "approval" | "question"
+    var kind: String
+    var title: String
+    var detail: String
+    var diff: DiffPreview?
+    var questions: [Question]
+    var canAllowSession: Bool
+    /// The agent is waiting on us; otherwise the card can only hand off to the session.
+    var held: Bool
+    var subagent: String?
+}
+
+struct DiffPreview: Decodable, Equatable {
+    var added: Int
+    var removed: Int
+    var text: String
+}
+
+struct Question: Decodable, Equatable {
+    var question: String
+    var header: String
+    var options: [QuestionOption]
+    var multiSelect: Bool
+}
+
+struct QuestionOption: Decodable, Equatable {
+    var label: String
+    var description: String
 }
 
 struct Subagent: Decodable, Equatable {

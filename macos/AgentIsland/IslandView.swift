@@ -5,6 +5,11 @@ import SwiftUI
 /// The island: one black object that is the notch, grows wings when sessions exist, and drops
 /// down into a dark glass panel when expanded. Lives in a fixed transparent window; only the
 /// visible shape receives the mouse (the controller toggles `ignoresMouseEvents`).
+/// Panels are never key unless summoned, so SwiftUI controls must take the very first click.
+final class FirstMouseHostingView<V: View>: NSHostingView<V> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 final class IslandView: NSView {
     // Layers / views, back to front.
     private let effect = NSVisualEffectView()
@@ -13,7 +18,7 @@ final class IslandView: NSView {
     private let band = CAGradientLayer()
     private let bandMask = CAShapeLayer()
     private let pill = CALayer()
-    let hosting: NSHostingController<PanelView>
+    let hosting: FirstMouseHostingView<PanelView>
 
     // Collapsed glyphs.
     private var dots: [String: CALayer] = [:]
@@ -40,7 +45,7 @@ final class IslandView: NSView {
     private let model: PanelModel
 
     init(model: PanelModel) {
-        hosting = NSHostingController(rootView: PanelView(model: model))
+        hosting = FirstMouseHostingView(rootView: PanelView(model: model))
         hosting.sizingOptions = []
         self.model = model
         super.init(frame: .zero)
@@ -82,9 +87,9 @@ final class IslandView: NSView {
         attentionDot.cornerRadius = dot / 2
         pill.addSublayer(attentionDot)
 
-        hosting.view.alphaValue = 0
-        addSubview(hosting.view)
-        hosting.view.frame = CGRect(x: 0, y: -2000, width: Self.panelWidth, height: 2000)
+        hosting.alphaValue = 0
+        addSubview(hosting)
+        hosting.frame = CGRect(x: 0, y: -2000, width: Self.panelWidth, height: 2000)
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
     }
@@ -96,7 +101,9 @@ final class IslandView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseDown(with event: NSEvent) {
-        onClick?()
+        // When expanded only the notch band toggles; clicks that fall through the panel content don't.
+        let p = convert(event.locationInWindow, from: nil)
+        if !expanded || p.y >= envelope.height - notchHeight { onClick?() }
     }
 
     override func layout() {
@@ -147,11 +154,11 @@ final class IslandView: NSView {
         let path: CGPath?
         if self.expanded {
             let w = Self.panelWidth
-            let measured = model.contentHeight > 0 ? model.contentHeight : hosting.view.fittingSize.height
+            let measured = model.contentHeight > 0 ? model.contentHeight : hosting.fittingSize.height
             let contentH = min(measured, H - notchHeight)
             let rect = CGRect(x: mid - w / 2, y: H - notchHeight - contentH, width: w, height: notchHeight + contentH)
             islandRect = rect.insetBy(dx: hasNotch ? -ear : 0, dy: 0)
-            hosting.view.frame = CGRect(x: rect.minX, y: rect.minY - 2000 + contentH, width: w, height: 2000)
+            hosting.frame = CGRect(x: rect.minX, y: rect.minY - 2000 + contentH, width: w, height: 2000)
             path = islandPath(x0: rect.minX, x1: rect.maxX, bottom: rect.minY, radius: 20)
         } else if sessions.isEmpty {
             // Invisible: the hardware notch alone (still hoverable on notched displays).
@@ -193,7 +200,7 @@ final class IslandView: NSView {
                 ctx.duration = animate ? (opening ? 0.22 : 0.14) : 0
                 ctx.allowsImplicitAnimation = true
                 effect.animator().alphaValue = opening ? 1 : 0
-                hosting.view.animator().alphaValue = opening ? 1 : 0
+                hosting.animator().alphaValue = opening ? 1 : 0
             })
             CATransaction.begin()
             CATransaction.setAnimationDuration(animate ? 0.16 : 0)

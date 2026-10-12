@@ -17,7 +17,9 @@ final class IslandPanel: NSPanel {
         becomesKeyOnlyIfNeeded = true
     }
 
-    override var canBecomeKey: Bool { false }
+    /// Only while summoned (⌥⌘I): then the panel takes keys without activating the app.
+    var allowsKey = false
+    override var canBecomeKey: Bool { allowsKey }
     override var canBecomeMain: Bool { false }
 }
 
@@ -97,6 +99,17 @@ final class IslandController {
             DispatchQueue.main.async { if self?.expanded == true { self?.render(animated: true) } }
         }
         model.onJump = { [weak self] s in self?.jump(s) }
+        model.onSummon = { [weak self] in self?.summon() }
+        model.onCommitted = { [weak self] in
+            // After the last answer, hand the keyboard back (D8).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                guard let self, self.model.summoned, self.model.cards.isEmpty else { return }
+                self.endSummon(collapse: true)
+            }
+        }
+        monitors.append(NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            (self?.key(e) ?? false) ? nil : e
+        } as Any)
 
         let nc = NSWorkspace.shared.notificationCenter
         observers.append((nc, nc.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.reposition() }))
@@ -116,6 +129,19 @@ final class IslandController {
         observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.openGroup"), object: nil, queue: .main) { [weak self] n in
             if let id = n.object as? String { self?.model.openGroups.insert(id) }
         }))
+        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.respond"), object: nil, queue: .main) { [weak self] n in
+            guard let self, let what = n.object as? String else { return }
+            guard let (_, item) = self.model.current else { if what == "undo" { self.model.undo() }; return }
+            switch what {
+            case "allow": self.model.allow(item)
+            case "deny": self.model.deny(item)
+            case "session": self.model.allowSession(item)
+            case "undo": self.model.undo()
+            case "submit": self.model.submitPicks(item)
+            case let p where p.hasPrefix("pick:"): self.model.pick(item, option: Int(p.dropFirst(5)) ?? 0)
+            default: break
+            }
+        }))
         observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.expand"), object: nil, queue: .main) { [weak self] n in
             self?.setExpanded((n.object as? String) != "collapse", pinned: true)
         }))
@@ -131,7 +157,7 @@ final class IslandController {
     }
 
     func update(_ snap: Snapshot) {
-        let previousAttention = snapshot.attention
+        let previousIDs = Set(snapshot.sessions.flatMap { $0.pending.map(\.id) })
         let gone = Set(snapshot.sessions.map(\.id)).subtracting(snap.sessions.map(\.id))
         if !gone.isEmpty {
             Jumper.forgetGhostty(gone)
@@ -144,10 +170,16 @@ final class IslandController {
             bound.insert(s.id)
             Jumper.bindGhostty(s)
         }
-        if snap.attention > previousAttention && autoExpand && !snap.paused {
-            autoOpened = true
-            setExpanded(true, pinned: pinned)
-            return
+        let ids = Set(snap.sessions.flatMap { $0.pending.map(\.id) })
+        if let st = model.staged, !ids.contains(st.id) { model.staged = nil } // answered elsewhere meanwhile
+        model.cardIndex = min(model.cardIndex, max(0, ids.count - 1))
+        // New request: open, unless the user is already looking at that session (D35).
+        for s in snap.sessions where s.pending.contains(where: { !previousIDs.contains($0.id) }) && autoExpand && !snap.paused {
+            Jumper.isLookingAt(s) { [weak self] looking in
+                guard let self, !looking, !self.snapshot.paused, self.snapshot.attention > 0 else { return }
+                self.autoOpened = true
+                self.setExpanded(true, pinned: self.pinned)
+            }
         }
         if snap.attention == 0 && autoOpened {
             autoOpened = false
@@ -180,9 +212,71 @@ final class IslandController {
     }
 
     private func clickedOutside() {
+        if model.summoned { endSummon(collapse: true); return }
         if expanded && !pointerInside {
             setExpanded(false, pinned: false)
         }
+    }
+
+    // MARK: Keyboard mode (D8)
+
+    private var previousApp: NSRunningApplication?
+
+    func toggleSummon() {
+        model.summoned ? endSummon(collapse: true) : summon()
+    }
+
+    func summon() {
+        guard !model.summoned else { return }
+        previousApp = NSWorkspace.shared.frontmostApplication
+        model.summoned = true
+        panel.allowsKey = true
+        setExpanded(true, pinned: true)
+        panel.makeKeyAndOrderFront(nil) // non-activating panel: our app stays in the background
+    }
+
+    func endSummon(collapse: Bool) {
+        guard model.summoned else { return }
+        model.summoned = false
+        panel.allowsKey = false
+        panel.resignKey()
+        previousApp?.activate()
+        if collapse { setExpanded(false, pinned: false) }
+    }
+
+    /// Shortcuts while summoned. Returns true when handled.
+    private func key(_ e: NSEvent) -> Bool {
+        guard model.summoned else { return false }
+        let typing = panel.firstResponder is NSTextView
+        let cmd = e.modifierFlags.contains(.command)
+        let chars = e.charactersIgnoringModifiers?.lowercased() ?? ""
+        if e.keyCode == 53 { // Esc
+            if model.staged != nil { model.undo() } else { endSummon(collapse: true) }
+            return true
+        }
+        guard let (_, item) = model.current else {
+            return false
+        }
+        if cmd, item.held {
+            switch chars {
+            case "y" where item.kind == "approval": model.allow(item); return true
+            case "n" where item.kind == "approval": model.deny(item); return true
+            case "\r": model.submitPicks(item); return true
+            default: break
+            }
+        }
+        if let n = Int(chars), (1...9).contains(n), item.kind == "question", cmd || !typing {
+            model.pick(item, option: n - 1)
+            return true
+        }
+        if !typing && !cmd {
+            switch (chars, e.keyCode) {
+            case ("j", _), (_, 125): model.move(1); return true   // ↓
+            case ("k", _), (_, 126): model.move(-1); return true  // ↑
+            default: break
+            }
+        }
+        return false
     }
 
     private func hover(_ inside: Bool) {
