@@ -175,3 +175,77 @@ fn an_unwatchable_but_live_pid_is_not_treated_as_exited() {
     assert_eq!(h.last()["sessions"][0]["state"], "working");
 }
 
+
+/// Start the hook like Claude would, without waiting for it.
+fn spawn_hook(h: &Harness, fixture_name: &str) -> std::process::Child {
+    let f = fixture(fixture_name);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_island-hook"))
+        .arg("claude")
+        .env("ISLAND_SOCKET", &h.sock)
+        .env("CLAUDE_PID", std::process::id().to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(f["payload"].to_string().as_bytes()).unwrap();
+    child
+}
+
+fn wait_for(h: &Harness, pred: impl Fn(&Value) -> bool) -> Value {
+    let t = Instant::now();
+    loop {
+        let s = h.last();
+        if pred(&s) || t.elapsed() > Duration::from_secs(3) {
+            return s;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn approval_waits_for_the_island_and_prints_claudes_decision() {
+    let h = start("approve");
+    let child = spawn_hook(&h, "PermissionRequest-Bash");
+    let snap = wait_for(&h, |s| s["attention"] == 1);
+    let card = &snap["sessions"][0]["pending"][0];
+    assert_eq!(card["held"], true);
+    std::thread::sleep(Duration::from_millis(100));
+    h.core.send(&serde_json::json!({"type":"answer","id":card["id"],"decision":"allow"}));
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["hookSpecificOutput"]["decision"]["behavior"], "allow");
+    assert_eq!(wait_for(&h, |s| s["attention"] == 0)["attention"], 0);
+}
+
+#[test]
+fn answering_in_the_terminal_releases_the_hook_with_no_decision() {
+    let h = start("terminal-answer");
+    let child = spawn_hook(&h, "PermissionRequest-Bash");
+    wait_for(&h, |s| s["attention"] == 1);
+    h.hook("PostToolUse-Bash", serde_json::json!({}));
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty(), "no decision: the terminal already answered");
+    assert_eq!(h.last()["attention"], 0);
+}
+
+#[test]
+fn a_killed_hook_withdraws_the_card() {
+    let h = start("killed");
+    let mut child = spawn_hook(&h, "PermissionRequest-Bash");
+    wait_for(&h, |s| s["attention"] == 1);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert_eq!(wait_for(&h, |s| s["attention"] == 0)["attention"], 0);
+}
+
+#[test]
+fn while_paused_approvals_fall_through_to_the_agent_immediately() {
+    let h = start("paused");
+    h.core.send(&serde_json::json!({"type":"pause","paused":true}));
+    let t = Instant::now();
+    let out = spawn_hook(&h, "PermissionRequest-Bash").wait_with_output().unwrap();
+    assert!(out.stdout.is_empty());
+    assert!(t.elapsed() < Duration::from_millis(1000));
+}

@@ -1,7 +1,9 @@
 //! Session store and state machine: the single source of truth for every session's state.
+use crate::diff::{self, DiffPreview};
 use crate::protocol::HookMessage;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 pub type Millis = u64;
 
@@ -23,8 +25,49 @@ pub enum State {
 pub struct Attention {
     pub id: u64,
     pub tool: String,
+    /// Raw tool input (can be a whole file for Write); kept for the reply, never sent to the UI.
+    #[serde(skip)]
     pub input: Value,
     pub since: Millis,
+    /// "approval" | "question"
+    pub kind: String,
+    /// "Run command", "Edit auth.ts", "Question"
+    pub title: String,
+    /// The command, path or URL being approved.
+    pub detail: String,
+    pub diff: Option<DiffPreview>,
+    pub questions: Vec<Question>,
+    pub can_allow_session: bool,
+    /// A hook is waiting on our answer (otherwise the card can only hand off to the agent).
+    pub held: bool,
+    /// Which subagent asked, if not the main agent.
+    pub subagent: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Question {
+    pub question: String,
+    pub header: String,
+    pub options: Vec<QuestionOption>,
+    pub multi_select: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+/// The user's response to an attention item.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Answer {
+    Allow,
+    Deny,
+    AllowSession,
+    /// question text → chosen label(s) or free text
+    Answers(BTreeMap<String, String>),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -129,6 +172,17 @@ pub struct Store {
     sessions: Vec<Session>,
     usage: Usage,
     next_id: u64,
+    /// Replies owed to waiting hooks: (attention id, exact stdout). Drained by the server.
+    replies: Vec<(u64, String)>,
+}
+
+/// Withdraw every pending item, releasing waiting hooks with an empty (no-decision) reply.
+fn clear_pending(s: &mut Session, replies: &mut Vec<(u64, String)>) {
+    for a in s.pending.drain(..) {
+        if a.held {
+            replies.push((a.id, String::new()));
+        }
+    }
 }
 
 impl Session {
@@ -141,8 +195,9 @@ impl Session {
 }
 
 impl Store {
-    pub fn handle(&mut self, msg: &HookMessage, now: Millis) {
-        let Ok(p) = serde_json::from_str::<Value>(&msg.payload) else { return };
+    /// Apply one hook event. Returns an attention id when the hook must wait for the user's answer.
+    pub fn handle(&mut self, msg: &HookMessage, now: Millis) -> Option<u64> {
+        let Ok(p) = serde_json::from_str::<Value>(&msg.payload) else { return None };
         if msg.agent == "statusline" {
             let windows: Vec<LimitWindow> = [("five_hour", "5h"), ("seven_day", "7d")]
                 .iter()
@@ -159,9 +214,9 @@ impl Store {
             if !windows.is_empty() {
                 self.usage.claude = Some(AgentUsage { observed_at: now, windows });
             }
-            return;
+            return None;
         }
-        let Some(id) = p["session_id"].as_str() else { return };
+        let Some(id) = p["session_id"].as_str() else { return None };
         let idx = match self.sessions.iter().position(|s| s.id == id && s.agent == msg.agent) {
             Some(i) => i,
             None => {
@@ -186,6 +241,7 @@ impl Store {
         };
         self.next_id += 1;
         let attention_id = self.next_id;
+        let replies = &mut self.replies;
         let s = &mut self.sessions[idx];
         let tool = p["tool_name"].as_str().unwrap_or_default();
         let agent_id = p["agent_id"].as_str();
@@ -202,7 +258,7 @@ impl Store {
                 }
             }
             "SessionEnd" => {
-                s.pending.clear();
+                clear_pending(s, replies);
                 s.set(State::Ended, now);
             }
             "SubagentStart" => {
@@ -218,7 +274,7 @@ impl Store {
                 }
             }
             "UserPromptSubmit" => {
-                s.pending.clear();
+                clear_pending(s, replies);
                 s.state = State::Working;
                 s.since = now;
                 s.activity = "Thinking".into();
@@ -238,19 +294,28 @@ impl Store {
                 }
             }
             "PermissionRequest" => {
-                s.pending.push(Attention { id: attention_id, tool: tool.into(), input: p["tool_input"].clone(), since: now });
+                let subagent = agent_id.map(|aid| {
+                    s.subagents.iter().find(|a| a.id == aid).map(|a| a.kind.clone())
+                        .unwrap_or_else(|| p["agent_type"].as_str().unwrap_or("Subagent").to_string())
+                });
+                s.pending.push(attention(attention_id, tool, &p["tool_input"], now, subagent));
                 s.set(State::NeedsInput, now);
+                return Some(attention_id);
             }
             "PostToolUse" | "PostToolUseFailure" => {
+                // Answered in the terminal: free the hook that is still waiting on us.
                 if let Some(i) = s.pending.iter().position(|a| a.tool == tool && a.input == p["tool_input"]) {
-                    s.pending.remove(i);
+                    let a = s.pending.remove(i);
+                    if a.held {
+                        replies.push((a.id, String::new()));
+                    }
                 }
                 if s.pending.is_empty() && s.state == State::NeedsInput {
                     s.set(State::Working, now);
                 }
             }
             "Stop" => {
-                s.pending.clear();
+                clear_pending(s, replies);
                 let running = p["background_tasks"]
                     .as_array()
                     .map_or(0, |t| t.iter().filter(|t| t["status"] == "running").count());
@@ -262,11 +327,59 @@ impl Store {
                 }
             }
             "StopFailure" => {
-                s.pending.clear();
+                clear_pending(s, replies);
                 s.set(State::Error, now);
             }
             _ => {}
         }
+        None
+    }
+
+    fn take(&mut self, id: u64) -> Option<(usize, Attention)> {
+        for (si, s) in self.sessions.iter_mut().enumerate() {
+            if let Some(i) = s.pending.iter().position(|a| a.id == id) {
+                return Some((si, s.pending.remove(i)));
+            }
+        }
+        None
+    }
+
+    fn after_resolve(&mut self, si: usize, now: Millis) {
+        let s = &mut self.sessions[si];
+        if s.pending.is_empty() && s.state == State::NeedsInput {
+            s.set(State::Working, now);
+        }
+    }
+
+    /// The user answered from the island. Unknown / already-resolved ids are ignored.
+    pub fn answer(&mut self, id: u64, answer: Answer, now: Millis) {
+        let Some((si, a)) = self.take(id) else { return };
+        if a.held {
+            let agent = self.sessions[si].agent.clone();
+            self.replies.push((id, reply_for(&agent, &a, &answer)));
+        }
+        self.after_resolve(si, now);
+    }
+
+    /// The waiting hook disappeared (the agent cancelled it, e.g. Esc in the terminal).
+    pub fn hook_gone(&mut self, id: u64, now: Millis) {
+        if let Some((si, _)) = self.take(id) {
+            self.after_resolve(si, now);
+        }
+    }
+
+    /// Stop waiting on this item's hook (it was released empty); the card stays as a handoff.
+    pub fn detach(&mut self, id: u64) {
+        for s in &mut self.sessions {
+            for a in s.pending.iter_mut().filter(|a| a.id == id) {
+                a.held = false;
+            }
+        }
+    }
+
+    /// Replies owed to waiting hooks since the last call.
+    pub fn take_replies(&mut self) -> Vec<(u64, String)> {
+        std::mem::take(&mut self.replies)
     }
 
     fn find(&mut self, agent: &str, id: &str) -> Option<&mut Session> {
@@ -286,7 +399,7 @@ impl Store {
         for s in self.sessions.iter_mut().filter(|s| s.pid == Some(pid)) {
             let mid_turn = matches!(s.state, State::Working | State::NeedsInput);
             if !matches!(s.state, State::Ended | State::Error) {
-                s.pending.clear();
+                clear_pending(s, &mut self.replies);
                 s.set(if mid_turn { State::Error } else { State::Ended }, now);
             }
         }
@@ -341,6 +454,92 @@ impl Store {
             usage: self.usage.clone(),
         }
     }
+}
+
+fn attention(id: u64, tool: &str, input: &Value, now: Millis, subagent: Option<String>) -> Attention {
+    let file = |v: &Value| basename(v).to_string();
+    let path = input["file_path"].as_str().or(input["notebook_path"].as_str()).unwrap_or_default().to_string();
+    let compact = || {
+        let t = input.to_string();
+        if t.chars().count() > 300 { format!("{}…", t.chars().take(300).collect::<String>()) } else { t }
+    };
+    let (kind, title, detail) = match tool {
+        "AskUserQuestion" => ("question", "Question".to_string(), String::new()),
+        "Bash" => ("approval", "Run command".to_string(), input["command"].as_str().unwrap_or_default().to_string()),
+        "Edit" | "MultiEdit" => ("approval", format!("Edit {}", file(&input["file_path"])), path),
+        "Write" => {
+            let verb = if std::path::Path::new(&path).exists() { "Write" } else { "Create" };
+            ("approval", format!("{verb} {}", file(&input["file_path"])), path)
+        }
+        "NotebookEdit" => ("approval", format!("Edit notebook {}", file(&input["notebook_path"])), path),
+        "WebFetch" => {
+            let url = input["url"].as_str().unwrap_or_default();
+            ("approval", format!("Fetch {}", url.split("://").nth(1).unwrap_or(url).split('/').next().unwrap_or_default()), url.to_string())
+        }
+        "ExitPlanMode" => ("approval", "Start on this plan".to_string(), input["plan"].as_str().unwrap_or_default().to_string()),
+        t if t.starts_with("mcp__") => {
+            let mut parts = t.splitn(3, "__").skip(1);
+            let (server, name) = (parts.next().unwrap_or_default(), parts.next().unwrap_or_default());
+            ("approval", format!("Use {name} ({server})"), compact())
+        }
+        t => ("approval", format!("Use {t}"), compact()),
+    };
+    let questions = input["questions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|q| Question {
+            question: q["question"].as_str().unwrap_or_default().into(),
+            header: q["header"].as_str().unwrap_or_default().into(),
+            options: q["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|o| QuestionOption {
+                    label: o["label"].as_str().unwrap_or_default().into(),
+                    description: o["description"].as_str().unwrap_or_default().into(),
+                })
+                .collect(),
+            multi_select: q["multiSelect"].as_bool().unwrap_or(false),
+        })
+        .collect();
+    Attention {
+        id,
+        tool: tool.into(),
+        input: input.clone(),
+        since: now,
+        kind: kind.into(),
+        title,
+        detail,
+        diff: diff::preview(tool, input),
+        questions,
+        can_allow_session: kind == "approval" && tool != "ExitPlanMode",
+        held: true,
+        subagent,
+    }
+}
+
+/// Exact stdout for the agent's waiting hook.
+fn reply_for(agent: &str, a: &Attention, answer: &Answer) -> String {
+    let _ = agent; // Codex uses the same PermissionRequest shape (allow/deny only).
+    let decision = match answer {
+        Answer::Allow => json!({"behavior": "allow"}),
+        Answer::Deny => json!({"behavior": "deny", "message": "Denied from Agent Island"}),
+        Answer::AllowSession => {
+            let mut rule = json!({"toolName": a.tool});
+            if a.tool == "Bash" {
+                rule["ruleContent"] = a.input["command"].clone();
+            }
+            json!({"behavior": "allow", "updatedPermissions": [
+                {"type": "addRules", "rules": [rule], "behavior": "allow", "destination": "session"}]})
+        }
+        Answer::Answers(map) => {
+            let mut input = a.input.clone();
+            input["answers"] = json!(map);
+            json!({"behavior": "allow", "updatedInput": input})
+        }
+    };
+    json!({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": decision}}).to_string()
 }
 
 fn basename(path: &Value) -> &str {

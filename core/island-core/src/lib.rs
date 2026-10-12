@@ -5,3 +5,4 @@ pub mod jsonedit;
 pub mod install;
 pub mod server;
 pub mod ffi;
+pub mod diff;

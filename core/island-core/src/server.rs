@@ -2,7 +2,9 @@
 //! Event-driven throughout: threads block on accept / kevent / a condvar; nothing polls.
 use crate::install::{Integrations, UninstallMode};
 use crate::protocol::{HookMessage, HookReply};
-use crate::store::{Millis, Store};
+use crate::store::{Answer, Millis, Store};
+use std::collections::HashMap;
+use std::io::Read;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
@@ -29,6 +31,13 @@ struct Shared {
     paused: bool,
     last_emit: String,
     watched: HashSet<i32>,
+    /// Hooks waiting for the user's answer, by attention id.
+    held: HashMap<u64, UnixStream>,
+}
+
+fn write_reply(mut stream: &UnixStream, stdout: String) {
+    let reply = serde_json::to_string(&HookReply { stdout }).unwrap();
+    let _ = stream.write_all(format!("{reply}\n").as_bytes());
 }
 
 struct Inner {
@@ -62,6 +71,12 @@ impl Inner {
 
     /// Call after every mutation: watch new PIDs, emit if anything visible changed, re-arm the timer.
     fn changed(&self, g: &mut Shared) {
+        for (id, stdout) in g.store.take_replies() {
+            if let Some(stream) = g.held.remove(&id) {
+                write_reply(&stream, stdout);
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+            }
+        }
         let pids: Vec<i32> = g.store.snapshot().sessions.iter().filter_map(|s| s.pid).collect();
         for pid in pids {
             if g.watched.insert(pid) && !watch_exit(self.kq, pid) {
@@ -83,18 +98,40 @@ impl Inner {
             return;
         }
         let Ok(msg) = serde_json::from_str::<HookMessage>(&line) else { return };
-        let stdout = {
+        let (stdout, held) = {
             let mut g = self.lock();
             if msg.agent == "query" {
-                Self::snapshot_json(&g)
+                (Self::snapshot_json(&g), None)
             } else {
-                g.store.handle(&msg, now_ms());
+                let mut hold = g.store.handle(&msg, now_ms());
+                if let Some(id) = hold {
+                    match (g.paused, stream.try_clone()) {
+                        (false, Ok(w)) => {
+                            g.held.insert(id, w);
+                        }
+                        _ => {
+                            g.store.detach(id); // let the agent's own prompt handle it
+                            hold = None;
+                        }
+                    }
+                }
                 self.changed(&mut g);
-                String::new()
+                (String::new(), hold)
             }
         };
-        let reply = serde_json::to_string(&HookReply { stdout }).unwrap();
-        let _ = (&stream).write_all(format!("{reply}\n").as_bytes());
+        let Some(id) = held else {
+            write_reply(&stream, stdout);
+            return;
+        };
+        // Wait for the user. EOF here means the hook died (the agent cancelled it) or we replied.
+        let _ = stream.set_read_timeout(None);
+        let mut buf = [0u8; 64];
+        while matches!((&stream).read(&mut buf), Ok(n) if n > 0) {}
+        let mut g = self.lock();
+        if g.held.remove(&id).is_some() {
+            g.store.hook_gone(id, now_ms());
+            self.changed(&mut g);
+        }
     }
 }
 
@@ -137,7 +174,13 @@ impl Core {
         // User event used only to wake the PID thread for shutdown.
         kq_user(kq, libc::EV_ADD | libc::EV_CLEAR, 0);
         let inner = Arc::new(Inner {
-            shared: Mutex::new(Shared { store: Store::default(), paused: false, last_emit: String::new(), watched: HashSet::new() }),
+            shared: Mutex::new(Shared {
+                store: Store::default(),
+                paused: false,
+                last_emit: String::new(),
+                watched: HashSet::new(),
+                held: HashMap::new(),
+            }),
             wake: Condvar::new(),
             emit,
             kq,
@@ -205,6 +248,16 @@ impl Core {
                 g.store.viewed(a, id, now_ms());
             }
             Some("pause") => g.paused = cmd["paused"].as_bool().unwrap_or(false),
+            Some("answer") => {
+                let answer = match (cmd["decision"].as_str(), cmd["answers"].as_object()) {
+                    (Some("allow"), _) => Answer::Allow,
+                    (Some("deny"), _) => Answer::Deny,
+                    (Some("allowSession"), _) => Answer::AllowSession,
+                    (_, Some(m)) => Answer::Answers(m.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string())).collect()),
+                    _ => return,
+                };
+                g.store.answer(cmd["id"].as_u64().unwrap_or_default(), answer, now_ms());
+            }
             _ => return,
         }
         self.inner.changed(&mut g);
