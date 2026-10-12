@@ -1,0 +1,20 @@
+{
+ "method": "item/commandExecution/requestApproval",
+ "id": 0,
+ "params": {
+  "kind": "command",
+  "threadId": "01a12fc4-413a-7d30-8744-8d3dc1664395",
+  "turnId": "01a12fc4-ead1-7a90-8e4c-36a305b74a3a",
+  "itemId": "exec-978ab1a3-3d46-42ce-a415-a4aec3a2172f",
+  "environmentId": "local",
+  "reason": "May I create codex-approve.txt in the workspace with escalated write access?",
+  "command": "/bin/zsh -lc 'touch codex-approve.txt'",
+  "cwd": "/private/tmp/spike/proj",
+  "commandActions": [
+   {
+    "type": "unknown",
+    "command": "touch codex-approve.txt"
+   }
+  ]
+ }
+}

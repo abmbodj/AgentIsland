@@ -1,0 +1,23 @@
+{
+ "payload": {
+  "session_id": "01a12fc4-413a-7d30-8744-8d3dc1664395",
+  "turn_id": "01a12fc4-ead1-7a90-8e4c-36a305b74a3a",
+  "transcript_path": "/private/tmp/cx/home/sessions/2026/10/12/rollout-2026-10-12T06-59-13-01a12fc4-413a-7d30-8744-8d3dc1664395.jsonl",
+  "cwd": "/private/tmp/spike/proj",
+  "hook_event_name": "PermissionRequest",
+  "model": "gpt-6-luna",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_input": {
+   "command": "touch codex-approve.txt",
+   "description": "May I create codex-approve.txt in the workspace with escalated write access?"
+  }
+ },
+ "env": {
+  "TERM_PROGRAM": "tmux",
+  "CODEX_HOME": "/tmp/cx/home",
+  "TMUX": "/private/tmp/tmux-501/cx,34127,0",
+  "__CFBundleIdentifier": "com.t3tools.t3code",
+  "TMUX_PANE": "%0"
+ }
+}

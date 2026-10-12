@@ -1,0 +1,43 @@
+{
+ "payload": {
+  "session_id": "01a12fc4-413a-7d30-8744-8d3dc1664395",
+  "turn_id": "01a12fc6-af11-7c23-8e9e-fc7173cd544f",
+  "transcript_path": "/private/tmp/cx/home/sessions/2026/10/12/rollout-2026-10-12T06-59-13-01a12fc4-413a-7d30-8744-8d3dc1664395.jsonl",
+  "cwd": "/private/tmp/spike/proj",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-6-luna",
+  "permission_mode": "default",
+  "tool_name": "request_user_input",
+  "tool_input": {
+   "questions": [
+    {
+     "header": "Color",
+     "id": "preferred_color",
+     "question": "Which color do you prefer?",
+     "options": [
+      {
+       "label": "Red",
+       "description": "Use red in the one-line plan."
+      },
+      {
+       "label": "Green",
+       "description": "Use green in the one-line plan."
+      },
+      {
+       "label": "Blue",
+       "description": "Use blue in the one-line plan."
+      }
+     ]
+    }
+   ]
+  },
+  "tool_use_id": "call_371d1953c38f4931ac85a4e4eb7c9740"
+ },
+ "env": {
+  "TERM_PROGRAM": "tmux",
+  "CODEX_HOME": "/tmp/cx/home",
+  "TMUX": "/private/tmp/tmux-501/cx,34127,0",
+  "__CFBundleIdentifier": "com.t3tools.t3code",
+  "TMUX_PANE": "%0"
+ }
+}

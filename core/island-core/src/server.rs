@@ -1,5 +1,6 @@
 //! The running core: local socket server, process-exit watcher and deadline timer around the Store.
 //! Event-driven throughout: threads block on accept / kevent / a condvar; nothing polls.
+use crate::codex_appserver::Conn;
 use crate::install::{Integrations, UninstallMode};
 use crate::protocol::{HookMessage, HookReply};
 use crate::store::{Answer, Millis, Store};
@@ -33,6 +34,25 @@ struct Shared {
     watched: HashSet<i32>,
     /// Hooks waiting for the user's answer, by attention id.
     held: HashMap<u64, UnixStream>,
+    /// Codex app-server connections, one per CODEX_HOME.
+    codex: HashMap<PathBuf, CodexLink>,
+    /// Our outstanding JSON-RPC requests: (connection, request id) → what it was.
+    rpc: HashMap<(u64, u64), Rpc>,
+    /// Codex threads with an attach / identity lookup already started.
+    attaching: HashSet<String>,
+    identified: HashSet<String>,
+    next_conn: u64,
+}
+
+struct CodexLink {
+    conn: Arc<Conn>,
+    ready: bool,
+    queued: Vec<String>,
+}
+
+enum Rpc {
+    Initialize,
+    Resume(String),
 }
 
 fn write_reply(mut stream: &UnixStream, stdout: String) {
@@ -48,6 +68,7 @@ struct Inner {
     sock: PathBuf,
     stop: AtomicBool,
     integrations: Integrations,
+    home: PathBuf,
 }
 
 pub struct Core {
@@ -77,6 +98,11 @@ impl Inner {
                 let _ = stream.shutdown(std::net::Shutdown::Both);
             }
         }
+        for (conn_id, msg) in g.store.take_appserver_replies() {
+            if let Some(l) = g.codex.values().find(|l| l.conn.id == conn_id) {
+                let _ = l.conn.send(&msg);
+            }
+        }
         let pids: Vec<i32> = g.store.snapshot().sessions.iter().filter_map(|s| s.pid).collect();
         for pid in pids {
             if g.watched.insert(pid) && !watch_exit(self.kq, pid) {
@@ -91,7 +117,7 @@ impl Inner {
         self.wake.notify_all();
     }
 
-    fn handle_conn(&self, stream: UnixStream) {
+    fn handle_conn(self: &Arc<Self>, stream: UnixStream) {
         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
         let mut line = String::new();
         if BufReader::new(&stream).read_line(&mut line).is_err() {
@@ -104,6 +130,9 @@ impl Inner {
                 (Self::snapshot_json(&g), None)
             } else {
                 let mut hold = g.store.handle(&msg, now_ms());
+                if msg.agent == "codex" {
+                    self.codex_followups(&mut g, &msg);
+                }
                 if let Some(id) = hold {
                     match (g.paused, stream.try_clone()) {
                         (false, Ok(w)) => {
@@ -133,6 +162,158 @@ impl Inner {
             self.changed(&mut g);
         }
     }
+}
+
+impl Inner {
+    /// After a Codex hook event: attach to its app-server, resolve the TUI's identity, read limits.
+    fn codex_followups(self: &Arc<Self>, g: &mut Shared, msg: &HookMessage) {
+        let Ok(p) = serde_json::from_str::<Value>(&msg.payload) else { return };
+        let (Some(thread), Some(cwd)) = (p["session_id"].as_str(), p["cwd"].as_str()) else { return };
+        let (thread, cwd) = (thread.to_string(), cwd.to_string());
+        let event = p["hook_event_name"].as_str().unwrap_or_default();
+        let home = msg.env.get("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| self.home.join(".codex"));
+        let inline = g.store.snapshot().sessions.iter().any(|s| s.agent == "codex" && s.id == thread && s.inline);
+
+        if event == "SessionEnd" {
+            if let Some(l) = g.codex.get(&home) {
+                let _ = l.conn.request("thread/unsubscribe", json!({"threadId": thread}));
+            }
+            g.attaching.remove(&thread);
+            return;
+        }
+        if !inline && g.attaching.insert(thread.clone()) {
+            let i = self.clone();
+            let (t, h) = (thread.clone(), home.clone());
+            std::thread::spawn(move || i.attach(h, t));
+        }
+        if g.identified.insert(thread.clone()) {
+            let i = self.clone();
+            let (t, c, transcript) = (thread.clone(), cwd.clone(), p["transcript_path"].as_str().map(PathBuf::from));
+            std::thread::spawn(move || i.identify(t, c, transcript));
+        }
+        if !inline && matches!(event, "Stop" | "UserPromptSubmit") {
+            if let Some(path) = p["transcript_path"].as_str().map(PathBuf::from) {
+                let i = self.clone();
+                std::thread::spawn(move || {
+                    if let Some(line) = last_rate_limits(&path) {
+                        let mut g = i.lock();
+                        g.store.codex_rollout_rate_limits(&line, now_ms());
+                        i.changed(&mut g);
+                    }
+                });
+            }
+        }
+    }
+
+    /// Subscribe to the thread on its CODEX_HOME's shared daemon (if one is running).
+    fn attach(self: &Arc<Self>, home: PathBuf, thread: String) {
+        let existing = self.lock().codex.get(&home).map(|l| l.conn.clone());
+        if existing.is_none() {
+            match Conn::connect(0, &home) {
+                Ok((mut conn, reader)) => {
+                    let mut g = self.lock();
+                    if !g.codex.contains_key(&home) {
+                        g.next_conn += 1;
+                        conn.id = g.next_conn;
+                        let conn = Arc::new(conn);
+                        if let Ok(rid) = conn.initialize() {
+                            g.rpc.insert((conn.id, rid), Rpc::Initialize);
+                        }
+                        g.codex.insert(home.clone(), CodexLink { conn: conn.clone(), ready: false, queued: vec![] });
+                        let i = self.clone();
+                        let h = home.clone();
+                        std::thread::Builder::new().name("island-codex".into()).spawn(move || i.read_codex(h, conn, reader)).ok();
+                    }
+                }
+                Err(_) => {
+                    // No daemon (embedded TUI or Desktop's private server): stay a handoff, retry next event.
+                    self.lock().attaching.remove(&thread);
+                    return;
+                }
+            }
+        }
+        let mut g = self.lock();
+        let Some(link) = g.codex.get_mut(&home) else { return };
+        if link.ready {
+            let conn = link.conn.clone();
+            if let Ok(rid) = conn.request("thread/resume", json!({"threadId": thread, "excludeTurns": true})) {
+                g.rpc.insert((conn.id, rid), Rpc::Resume(thread));
+            }
+        } else {
+            link.queued.push(thread);
+        }
+    }
+
+    fn read_codex(self: Arc<Self>, home: PathBuf, conn: Arc<Conn>, mut reader: BufReader<UnixStream>) {
+        while let Ok(Some(m)) = conn.read(&mut reader) {
+            let mut g = self.lock();
+            let is_response = m.get("method").is_none();
+            if let (true, Some(rid)) = (is_response, m["id"].as_u64()) {
+                match g.rpc.remove(&(conn.id, rid)) {
+                    Some(Rpc::Initialize) => {
+                        let _ = conn.initialized();
+                        let queued = g.codex.get_mut(&home).map(|l| {
+                            l.ready = true;
+                            std::mem::take(&mut l.queued)
+                        });
+                        for t in queued.unwrap_or_default() {
+                            if let Ok(r) = conn.request("thread/resume", json!({"threadId": t, "excludeTurns": true})) {
+                                g.rpc.insert((conn.id, r), Rpc::Resume(t));
+                            }
+                        }
+                    }
+                    Some(Rpc::Resume(t)) => {
+                        if m.get("result").is_some() {
+                            g.store.set_attached("codex", &t, Some(conn.id));
+                        } else {
+                            g.attaching.remove(&t);
+                        }
+                    }
+                    None => {}
+                }
+            } else {
+                g.store.appserver_message(conn.id, &m, now_ms());
+            }
+            self.changed(&mut g);
+        }
+        let mut g = self.lock();
+        g.codex.remove(&home);
+        g.rpc.retain(|(c, _), _| *c != conn.id);
+        g.attaching.clear();
+        g.store.appserver_closed(conn.id);
+        self.changed(&mut g);
+    }
+
+    /// Codex hooks run in the daemon; find the TUI the user actually typed in (or the Desktop app).
+    fn identify(self: &Arc<Self>, thread: String, cwd: String, transcript: Option<PathBuf>) {
+        let found = crate::procscan::interactive("codex", &cwd);
+        let desktop = found.is_none()
+            && transcript
+                .and_then(|p| std::fs::File::open(p).ok())
+                .and_then(|f| BufReader::new(f).lines().next()?.ok())
+                .is_some_and(|l| l.contains("\"originator\":\"Codex Desktop\""));
+        let mut g = self.lock();
+        match found {
+            Some(f) => g.store.set_identity("codex", &thread, f.terminal, Some(f.pid)),
+            None if desktop => {
+                let t = crate::store::Terminal { bundle_id: Some("com.openai.codex".into()), ..Default::default() };
+                g.store.set_identity("codex", &thread, t, None);
+            }
+            None => return,
+        }
+        self.changed(&mut g);
+    }
+}
+
+/// The last `rate_limits` record in a Codex rollout (reads only the file's tail).
+fn last_rate_limits(path: &std::path::Path) -> Option<Value> {
+    use std::io::{Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(256 * 1024))).ok()?;
+    let mut tail = String::new();
+    f.read_to_string(&mut tail).ok()?;
+    tail.lines().rev().filter(|l| l.contains("\"rate_limits\"")).find_map(|l| serde_json::from_str(l).ok())
 }
 
 fn kq_user(kq: i32, flags: u16, fflags: u32) {
@@ -180,6 +361,11 @@ impl Core {
                 last_emit: String::new(),
                 watched: HashSet::new(),
                 held: HashMap::new(),
+                codex: HashMap::new(),
+                rpc: HashMap::new(),
+                attaching: HashSet::new(),
+                identified: HashSet::new(),
+                next_conn: 0,
             }),
             wake: Condvar::new(),
             emit,
@@ -187,6 +373,7 @@ impl Core {
             sock,
             stop: AtomicBool::new(false),
             integrations,
+            home: cfg.home.clone(),
         });
 
         let i = inner.clone();

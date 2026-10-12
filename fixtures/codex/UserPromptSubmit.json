@@ -1,0 +1,19 @@
+{
+ "payload": {
+  "session_id": "01a12fc4-413a-7d30-8744-8d3dc1664395",
+  "turn_id": "01a12fc4-6d9c-7901-8c58-053f4bb3ae6d",
+  "transcript_path": "/private/tmp/cx/home/sessions/2026/10/12/rollout-2026-10-12T06-59-13-01a12fc4-413a-7d30-8744-8d3dc1664395.jsonl",
+  "cwd": "/private/tmp/spike/proj",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-6-luna",
+  "permission_mode": "default",
+  "prompt": "Run this shell command and nothing else: touch codex-approve.txt"
+ },
+ "env": {
+  "TERM_PROGRAM": "tmux",
+  "CODEX_HOME": "/tmp/cx/home",
+  "TMUX": "/private/tmp/tmux-501/cx,34127,0",
+  "__CFBundleIdentifier": "com.t3tools.t3code",
+  "TMUX_PANE": "%0"
+ }
+}

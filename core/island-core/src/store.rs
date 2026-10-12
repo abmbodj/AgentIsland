@@ -38,19 +38,38 @@ pub struct Attention {
     pub diff: Option<DiffPreview>,
     pub questions: Vec<Question>,
     pub can_allow_session: bool,
-    /// A hook is waiting on our answer (otherwise the card can only hand off to the agent).
+    /// The agent is waiting on our answer (otherwise the card can only hand off to the session).
     pub held: bool,
     /// Which subagent asked, if not the main agent.
     pub subagent: Option<String>,
+    /// The agent's own explanation ("May I create … with escalated write access?").
+    pub note: Option<String>,
+    /// Where the answer goes.
+    #[serde(skip)]
+    pub channel: Channel,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum Channel {
+    /// A blocked hook process (Claude).
+    #[default]
+    Hook,
+    /// A JSON-RPC server request on a Codex app-server connection.
+    AppServer { conn: u64, request_id: Value },
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Question {
+    /// Codex answers are keyed by id; Claude's by question text (id empty).
+    pub id: String,
     pub question: String,
     pub header: String,
     pub options: Vec<QuestionOption>,
     pub multi_select: bool,
+    /// A free-text answer is accepted.
+    pub allows_other: bool,
+    pub secret: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -87,6 +106,16 @@ pub struct Session {
     pub pid: Option<i32>,
     pub terminal: Terminal,
     pub last_event: Millis,
+    /// Answers go through the agent's app-server (Codex daemon) rather than a hook.
+    pub inline: bool,
+    #[serde(skip)]
+    pub conn: Option<u64>,
+    /// Terminal identity/PID came from the agent's own process; hook env must not overwrite it.
+    #[serde(skip)]
+    pub identity_locked: bool,
+    /// Codex file changes seen in `item/started`, by item id, for approval diffs.
+    #[serde(skip)]
+    pub file_changes: BTreeMap<String, (String, DiffPreview)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -174,6 +203,8 @@ pub struct Store {
     next_id: u64,
     /// Replies owed to waiting hooks: (attention id, exact stdout). Drained by the server.
     replies: Vec<(u64, String)>,
+    /// JSON-RPC responses owed to app-server connections: (connection, message).
+    appserver_replies: Vec<(u64, Value)>,
 }
 
 /// Withdraw every pending item, releasing waiting hooks with an empty (no-decision) reply.
@@ -235,6 +266,10 @@ impl Store {
                     pid: None,
                     terminal: Terminal::default(),
                     last_event: now,
+                    inline: false,
+                    conn: None,
+                    identity_locked: false,
+                    file_changes: BTreeMap::new(),
                 });
                 self.sessions.len() - 1
             }
@@ -246,9 +281,11 @@ impl Store {
         let tool = p["tool_name"].as_str().unwrap_or_default();
         let agent_id = p["agent_id"].as_str();
         s.last_event = now;
-        s.terminal = Terminal::from(msg);
-        if let Some(pid) = msg.env.get("CLAUDE_PID").and_then(|v| v.parse().ok()) {
-            s.pid = Some(pid);
+        if !s.identity_locked {
+            s.terminal = Terminal::from(msg);
+            if let Some(pid) = msg.env.get("CLAUDE_PID").and_then(|v| v.parse().ok()) {
+                s.pid = Some(pid);
+            }
         }
 
         match p["hook_event_name"].as_str().unwrap_or_default() {
@@ -293,6 +330,21 @@ impl Store {
                     }
                 }
             }
+            "PermissionRequest" if s.agent == "codex" => {
+                // Codex runs this hook before showing its own prompt, so never hold it. Attached
+                // sessions get an inline card from the app-server request that follows instead.
+                if !s.inline {
+                    let mut a = attention(attention_id, tool, &p["tool_input"], now, None);
+                    a.held = false;
+                    a.note = p["tool_input"]["description"].as_str().map(str::to_string);
+                    s.pending.push(a);
+                    s.set(State::NeedsInput, now);
+                }
+            }
+            "Interrupt" => {
+                clear_pending(s, replies);
+                s.set(State::Idle, now);
+            }
             "PermissionRequest" => {
                 let subagent = agent_id.map(|aid| {
                     s.subagents.iter().find(|a| a.id == aid).map(|a| a.kind.clone())
@@ -304,7 +356,14 @@ impl Store {
             }
             "PostToolUse" | "PostToolUseFailure" => {
                 // Answered in the terminal: free the hook that is still waiting on us.
-                if let Some(i) = s.pending.iter().position(|a| a.tool == tool && a.input == p["tool_input"]) {
+                let same = |a: &Attention| {
+                    a.tool == tool
+                        && match (a.input.get("command"), p["tool_input"].get("command")) {
+                            (Some(x), Some(y)) => x == y,
+                            _ => a.input == p["tool_input"],
+                        }
+                };
+                if let Some(i) = s.pending.iter().position(|a| a.channel == Channel::Hook && same(a)) {
                     let a = s.pending.remove(i);
                     if a.held {
                         replies.push((a.id, String::new()));
@@ -355,8 +414,12 @@ impl Store {
     pub fn answer(&mut self, id: u64, answer: Answer, now: Millis) {
         let Some((si, a)) = self.take(id) else { return };
         if a.held {
-            let agent = self.sessions[si].agent.clone();
-            self.replies.push((id, reply_for(&agent, &a, &answer)));
+            match &a.channel {
+                Channel::Hook => self.replies.push((id, reply_for(&a, &answer))),
+                Channel::AppServer { conn, request_id } => {
+                    self.appserver_replies.push((*conn, json!({"id": request_id, "result": codex_result(&a, &answer)})))
+                }
+            }
         }
         self.after_resolve(si, now);
     }
@@ -375,6 +438,152 @@ impl Store {
                 a.held = false;
             }
         }
+    }
+
+    /// The session is (or no longer is) subscribed on a Codex app-server connection.
+    pub fn set_attached(&mut self, agent: &str, id: &str, conn: Option<u64>) {
+        if let Some(s) = self.find(agent, id) {
+            s.inline = conn.is_some();
+            s.conn = conn;
+        }
+    }
+
+    /// Terminal identity and PID resolved from the agent's own process (Codex hooks run in the daemon).
+    pub fn set_identity(&mut self, agent: &str, id: &str, terminal: Terminal, pid: Option<i32>) {
+        if let Some(s) = self.find(agent, id) {
+            s.terminal = terminal;
+            s.pid = pid;
+            s.identity_locked = true;
+        }
+    }
+
+    /// One JSON-RPC message from a Codex app-server connection (request or notification).
+    pub fn appserver_message(&mut self, conn: u64, m: &Value, now: Millis) {
+        let params = &m["params"];
+        let method = m["method"].as_str().unwrap_or_default();
+        if method == "account/rateLimits/updated" {
+            let rl = &params["rateLimits"];
+            let windows: Vec<LimitWindow> = [&rl["primary"], &rl["secondary"]]
+                .into_iter()
+                .filter_map(|w| window(w["usedPercent"].as_f64()?, w["windowDurationMins"].as_u64()?, w["resetsAt"].as_u64()?, now))
+                .collect();
+            if !windows.is_empty() {
+                self.usage.codex = Some(AgentUsage { observed_at: now, windows });
+            }
+            return;
+        }
+        let thread = params["threadId"].as_str().unwrap_or_default().to_string();
+        let Some(si) = self.sessions.iter().position(|s| s.agent == "codex" && s.id == thread) else { return };
+        if method == "serverRequest/resolved" {
+            let rid = &params["requestId"];
+            let s = &mut self.sessions[si];
+            s.pending.retain(|a| !matches!(&a.channel, Channel::AppServer { conn: c, request_id } if *c == conn && request_id == rid));
+            self.after_resolve(si, now);
+            return;
+        }
+        if method == "item/started" && params["item"]["type"] == "fileChange" {
+            let item = &params["item"];
+            let changes = item["changes"].as_array().cloned().unwrap_or_default();
+            let mut diff = DiffPreview { added: 0, removed: 0, text: String::new() };
+            for c in &changes {
+                let text = c["diff"].as_str().unwrap_or_default();
+                for l in text.lines() {
+                    if l.starts_with('+') && !l.starts_with("+++") { diff.added += 1 }
+                    if l.starts_with('-') && !l.starts_with("---") { diff.removed += 1 }
+                }
+                diff.text.push_str(&format!("{}\n{text}\n", c["path"].as_str().unwrap_or_default()));
+            }
+            let title = match changes.as_slice() {
+                [one] => format!("Edit {}", basename(&one["path"])),
+                many => format!("Edit {} files", many.len()),
+            };
+            self.sessions[si].file_changes.insert(item["id"].as_str().unwrap_or_default().to_string(), (title, diff));
+            return;
+        }
+        let Some(request_id) = m.get("id").cloned() else { return };
+        self.next_id += 1;
+        let id = self.next_id;
+        let s = &mut self.sessions[si];
+        let mut a = Attention {
+            id,
+            tool: method.to_string(),
+            input: params.clone(),
+            since: now,
+            kind: "approval".into(),
+            title: String::new(),
+            detail: String::new(),
+            diff: None,
+            questions: vec![],
+            can_allow_session: true,
+            held: true,
+            subagent: None,
+            note: params["reason"].as_str().map(str::to_string),
+            channel: Channel::AppServer { conn, request_id },
+        };
+        match method {
+            "item/commandExecution/requestApproval" => {
+                a.title = "Run command".into();
+                a.detail = params["commandActions"][0]["command"].as_str().or(params["command"].as_str()).unwrap_or_default().into();
+            }
+            "item/fileChange/requestApproval" => {
+                let (title, diff) = s.file_changes.get(params["itemId"].as_str().unwrap_or_default()).cloned()
+                    .unwrap_or(("Edit files".into(), DiffPreview { added: 0, removed: 0, text: String::new() }));
+                a.title = title;
+                a.diff = (!diff.text.is_empty()).then_some(diff);
+            }
+            "item/tool/requestUserInput" => {
+                a.kind = "question".into();
+                a.title = "Question".into();
+                a.can_allow_session = false;
+                a.questions = params["questions"].as_array().into_iter().flatten().map(|q| Question {
+                    id: q["id"].as_str().unwrap_or_default().into(),
+                    question: q["question"].as_str().unwrap_or_default().into(),
+                    header: q["header"].as_str().unwrap_or_default().into(),
+                    options: q["options"].as_array().into_iter().flatten().map(|o| QuestionOption {
+                        label: o["label"].as_str().unwrap_or_default().into(),
+                        description: o["description"].as_str().unwrap_or_default().into(),
+                    }).collect(),
+                    multi_select: false,
+                    allows_other: q["isOther"].as_bool().unwrap_or(false) || q["options"].is_null(),
+                    secret: q["isSecret"].as_bool().unwrap_or(false),
+                }).collect();
+            }
+            _ => return, // other request kinds stay with Codex's own UI
+        }
+        s.pending.push(a);
+        s.set(State::NeedsInput, now);
+    }
+
+    /// The app-server connection went away: its inline cards can only hand off now.
+    pub fn appserver_closed(&mut self, conn: u64) {
+        for s in self.sessions.iter_mut().filter(|s| s.conn == Some(conn)) {
+            s.inline = false;
+            s.conn = None;
+        }
+        for s in &mut self.sessions {
+            for a in &mut s.pending {
+                if matches!(a.channel, Channel::AppServer { conn: c, .. } if c == conn) {
+                    a.held = false;
+                    a.channel = Channel::Hook;
+                }
+            }
+        }
+    }
+
+    /// Rate limits from a Codex rollout `token_count` line (used when no app-server is attached).
+    pub fn codex_rollout_rate_limits(&mut self, line: &Value, now: Millis) {
+        let rl = &line["payload"]["rate_limits"];
+        let windows: Vec<LimitWindow> = [&rl["primary"], &rl["secondary"]]
+            .into_iter()
+            .filter_map(|w| window(w["used_percent"].as_f64()?, w["window_minutes"].as_u64()?, w["resets_at"].as_u64()?, now))
+            .collect();
+        if !windows.is_empty() {
+            self.usage.codex = Some(AgentUsage { observed_at: now, windows });
+        }
+    }
+
+    pub fn take_appserver_replies(&mut self) -> Vec<(u64, Value)> {
+        std::mem::take(&mut self.appserver_replies)
     }
 
     /// Replies owed to waiting hooks since the last call.
@@ -501,6 +710,9 @@ fn attention(id: u64, tool: &str, input: &Value, now: Millis, subagent: Option<S
                 })
                 .collect(),
             multi_select: q["multiSelect"].as_bool().unwrap_or(false),
+            id: String::new(),
+            allows_other: true,
+            secret: false,
         })
         .collect();
     Attention {
@@ -516,12 +728,41 @@ fn attention(id: u64, tool: &str, input: &Value, now: Millis, subagent: Option<S
         can_allow_session: kind == "approval" && tool != "ExitPlanMode",
         held: true,
         subagent,
+        note: None,
+        channel: Channel::Hook,
+    }
+}
+
+fn window(used: f64, minutes: u64, resets_secs: u64, now: Millis) -> Option<LimitWindow> {
+    let label = match minutes {
+        300 => "5h".to_string(),
+        10080 => "wk".to_string(),
+        m if m % 1440 == 0 => format!("{}d", m / 1440),
+        m => format!("{}h", (m + 59) / 60),
+    };
+    let resets_at = resets_secs * 1000;
+    (resets_at > now).then_some(LimitWindow { label, used_percent: used, resets_at })
+}
+
+/// JSON-RPC result for a Codex app-server request.
+fn codex_result(a: &Attention, answer: &Answer) -> Value {
+    match answer {
+        Answer::Allow => json!({"decision": "accept"}),
+        Answer::AllowSession => json!({"decision": "acceptForSession"}),
+        Answer::Deny => json!({"decision": "decline"}),
+        Answer::Answers(map) => {
+            let answers: serde_json::Map<String, Value> = a
+                .questions
+                .iter()
+                .filter_map(|q| map.get(&q.question).map(|v| (q.id.clone(), json!({"answers": [v]}))))
+                .collect();
+            json!({"answers": answers})
+        }
     }
 }
 
 /// Exact stdout for the agent's waiting hook.
-fn reply_for(agent: &str, a: &Attention, answer: &Answer) -> String {
-    let _ = agent; // Codex uses the same PermissionRequest shape (allow/deny only).
+fn reply_for(a: &Attention, answer: &Answer) -> String {
     let decision = match answer {
         Answer::Allow => json!({"behavior": "allow"}),
         Answer::Deny => json!({"behavior": "deny", "message": "Denied from Agent Island"}),
@@ -570,7 +811,16 @@ pub fn activity_label(tool: &str, input: &Value) -> String {
             format!("Fetching {host}")
         }
         "Agent" | "Task" => format!("Delegating to {}", input["subagent_type"].as_str().unwrap_or("an agent")),
-        "AskUserQuestion" => "Asking a question".into(),
+        "AskUserQuestion" | "request_user_input" => "Asking a question".into(),
+        "apply_patch" => {
+            let files: Vec<&str> = input["command"].as_str().or(input["input"].as_str()).or(input.as_str()).unwrap_or_default()
+                .lines().filter_map(|l| l.strip_prefix("*** Update File: ").or(l.strip_prefix("*** Add File: "))).collect();
+            match files.as_slice() {
+                [one] => format!("Editing {}", one.rsplit('/').next().unwrap_or(one)),
+                [] => "Editing files".into(),
+                many => format!("Editing {} files", many.len()),
+            }
+        }
         "TodoWrite" => "Planning".into(),
         t if t.starts_with("mcp__") => format!("Using {}", t.split("__").nth(1).unwrap_or(t)),
         t => t.to_string(),

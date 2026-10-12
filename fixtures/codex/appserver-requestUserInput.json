@@ -1,0 +1,34 @@
+{
+ "method": "item/tool/requestUserInput",
+ "id": 1,
+ "params": {
+  "threadId": "01a12fc4-413a-7d30-8744-8d3dc1664395",
+  "turnId": "01a12fc6-af11-7c23-8e9e-fc7173cd544f",
+  "itemId": "call_371d1953c38f4931ac85a4e4eb7c9740",
+  "questions": [
+   {
+    "id": "preferred_color",
+    "header": "Color",
+    "question": "Which color do you prefer?",
+    "isOther": true,
+    "isSecret": false,
+    "options": [
+     {
+      "label": "Red",
+      "description": "Use red in the one-line plan."
+     },
+     {
+      "label": "Green",
+      "description": "Use green in the one-line plan."
+     },
+     {
+      "label": "Blue",
+      "description": "Use blue in the one-line plan."
+     }
+    ]
+   }
+  ],
+  "isBlocking": true,
+  "autoResolutionMs": null
+ }
+}
