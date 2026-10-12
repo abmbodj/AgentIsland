@@ -1,0 +1,5 @@
+model = "gpt-6-luna"
+approval_policy = "never"
+
+[projects."/Users/me/code/app"]
+trust_level = "trusted"

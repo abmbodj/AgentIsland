@@ -384,11 +384,19 @@ fn codex_session_attaches_to_its_daemon_and_answers_inline() {
 }
 
 #[test]
-fn codex_without_a_daemon_falls_back_to_a_handoff_card() {
-    let h = start("codex-handoff");
-    let home = std::env::temp_dir().join(format!("isl-cx-none-{}", std::process::id()));
+fn codex_without_a_daemon_waits_until_released_to_its_own_prompt() {
+    let h = start("codex-hold");
+    let home = std::path::PathBuf::from(format!("/tmp/isl-cx-none-{}", std::process::id()));
     codex_hook(&h, &home, "SessionStart");
-    assert_eq!(codex_hook(&h, &home, "PermissionRequest-Bash"), "", "never blocks");
-    let card = &wait_for(&h, |s| s["attention"] == 1)["sessions"][0]["pending"][0];
-    assert_eq!(card["held"], false);
+    let f = codex_fixture("PermissionRequest-Bash");
+    let mut c = Command::new(env!("CARGO_BIN_EXE_island-hook"))
+        .arg("codex").env("ISLAND_SOCKET", &h.sock).env("CODEX_HOME", &home)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+    c.stdin.take().unwrap().write_all(f["payload"].to_string().as_bytes()).unwrap();
+    let card = wait_for(&h, |s| s["attention"] == 1)["sessions"][0]["pending"][0].clone();
+    assert_eq!((card["held"].clone(), card["releasable"].clone()), (Value::Bool(true), Value::Bool(true)));
+    h.core.send(&serde_json::json!({"type":"release","id":card["id"]}));
+    let out = c.wait_with_output().unwrap();
+    assert!(out.stdout.is_empty(), "released with no decision");
+    assert_eq!(h.last()["sessions"][0]["pending"][0]["held"], false);
 }

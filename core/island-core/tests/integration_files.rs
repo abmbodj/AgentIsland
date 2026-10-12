@@ -82,3 +82,25 @@ fn already_installed_plans_no_change() {
     i.apply_install(&["claude-hooks", "claude-statusline"]).unwrap();
     assert!(i.plan_install().is_empty());
 }
+
+#[test]
+fn codex_hooks_and_trust_round_trip_byte_for_byte() {
+    if island_core::install::find_codex().is_none() {
+        return; // hashes come from the real Codex CLI
+    }
+    let d = std::path::PathBuf::from(format!("/tmp/isl-cxrt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(d.join("home/.codex")).unwrap();
+    let config = "model = \"gpt-6-luna\"\napproval_policy = \"never\"\n";
+    std::fs::write(d.join("home/.codex/config.toml"), config).unwrap();
+    let i = Integrations::new(d.join("support"), d.join("home"));
+    let plan = i.plan_install();
+    let item = plan.iter().find(|p| p.id == "codex-hooks").expect("codex item offered when ~/.codex exists");
+    assert!(item.diff.contains("hooks.json") && item.diff.contains("config.toml"), "{}", item.diff);
+    i.apply_install(&["codex-hooks"]).unwrap();
+    let written = std::fs::read_to_string(d.join("home/.codex/config.toml")).unwrap();
+    assert!(written.starts_with(config) && written.contains("trusted_hash = \"sha256:"));
+    i.apply_uninstall(UninstallMode::Surgical).unwrap();
+    assert_eq!(std::fs::read_to_string(d.join("home/.codex/config.toml")).unwrap(), config);
+    assert!(!d.join("home/.codex/hooks.json").exists(), "we created hooks.json, so it is removed");
+}

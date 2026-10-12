@@ -435,6 +435,7 @@ impl Core {
                 g.store.viewed(a, id, now_ms());
             }
             Some("pause") => g.paused = cmd["paused"].as_bool().unwrap_or(false),
+            Some("release") => g.store.release(cmd["id"].as_u64().unwrap_or_default()),
             Some("answer") => {
                 let answer = match (cmd["decision"].as_str(), cmd["answers"].as_object()) {
                     (Some("allow"), _) => Answer::Allow,

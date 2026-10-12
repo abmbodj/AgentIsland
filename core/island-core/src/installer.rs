@@ -44,6 +44,102 @@ fn text_of<'a>(s: &'a str, n: &Node) -> &'a str {
     &s[n.start()..n.end()]
 }
 
+pub const CODEX_EVENTS: [&str; 10] = [
+    "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+    "PermissionRequest", "SubagentStart", "SubagentStop", "Stop", "Interrupt",
+];
+
+fn codex_group(hook: &str, event: &str) -> Value {
+    let mut h = json!({"type": "command", "command": format!("{} codex 2>/dev/null || true", shell_quote(hook))});
+    if event == "PermissionRequest" {
+        h["timeout"] = json!(86400);
+    }
+    if matches!(event, "PreToolUse" | "PostToolUse" | "PermissionRequest") {
+        json!({"matcher": "*", "hooks": [h]})
+    } else {
+        json!({"hooks": [h]})
+    }
+}
+
+/// `~/.codex/hooks.json` with one Agent Island group per Codex event (same JSON shape as Claude's hooks).
+pub fn install_codex_hooks(original: Option<&str>, hook: &str) -> Result<String, String> {
+    let s = original.unwrap_or("{}\n").to_string();
+    let root = jsonedit::parse(&s)?;
+    if !matches!(root, Node::Obj { .. }) {
+        return Err("hooks.json is not a JSON object".into());
+    }
+    let st = jsonedit::style(&s, &root);
+    add_groups(s, &CODEX_EVENTS, &st, |e| codex_group(hook, e))
+}
+
+/// "PreToolUse" → "pre_tool_use" (Codex's hook state key label).
+pub fn event_label(event: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in event.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            out.push('_');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
+}
+
+/// (event label, Codex hook state key) for each of our groups: "<hooks.json>:<label>:<group>:0".
+pub fn codex_trust_keys(hooks_json: &str, hooks_path: &str) -> Vec<(String, String)> {
+    let Ok(v) = serde_json::from_str::<Value>(hooks_json) else { return vec![] };
+    CODEX_EVENTS
+        .iter()
+        .filter_map(|e| {
+            let i = v["hooks"][e].as_array()?.iter().position(|g| g.to_string().contains(MARKER_JSON))?;
+            Some((event_label(e), format!("{hooks_path}:{}:{i}:0", event_label(e))))
+        })
+        .collect()
+}
+
+/// Our marker as it appears inside JSON-encoded text.
+const MARKER_JSON: &str = "/island-hook'";
+
+pub fn codex_config_block(entries: &[(String, String)]) -> String {
+    entries.iter().map(|(k, h)| format!("\n[hooks.state.\"{k}\"]\ntrusted_hash = \"{h}\"\n")).collect()
+}
+
+pub fn append_block(config: Option<&str>, block: &str) -> String {
+    let mut s = config.unwrap_or("").to_string();
+    if !s.is_empty() && !s.ends_with('\n') {
+        s.push('\n');
+    }
+    s.push_str(block);
+    s
+}
+
+/// Remove exactly the block we appended; None if it is no longer there verbatim.
+pub fn remove_block(config: &str, block: &str) -> Option<String> {
+    let i = config.rfind(block)?;
+    Some(format!("{}{}", &config[..i], &config[i + block.len()..]))
+}
+
+fn add_groups(mut s: String, events: &[&str], st: &jsonedit::Style, group: impl Fn(&str) -> Value) -> Result<String, String> {
+    for &event in events {
+        let root = jsonedit::parse(&s)?;
+        let Some(hooks) = root.get("hooks") else {
+            s = jsonedit::insert_member(&s, &root, 0, "hooks", &json!({}), st);
+            let root = jsonedit::parse(&s)?;
+            s = jsonedit::insert_member(&s, root.get("hooks").unwrap(), 1, event, &json!([group(event)]), st);
+            continue;
+        };
+        match hooks.get(event) {
+            Some(arr @ Node::Arr { .. }) => {
+                if !text_of(&s, arr).contains(MARKER) {
+                    s = jsonedit::append_item(&s, arr, 2, &group(event), st);
+                }
+            }
+            Some(_) => return Err(format!("hooks.{event} is not an array")),
+            None => s = jsonedit::insert_member(&s, hooks, 1, event, &json!([group(event)]), st),
+        }
+    }
+    Ok(s)
+}
+
 pub fn install_claude(original: Option<&str>, hook: &str, parts: ClaudeParts) -> Result<String, String> {
     let mut s = original.unwrap_or("{}\n").to_string();
     let root = jsonedit::parse(&s)?;
@@ -53,26 +149,8 @@ pub fn install_claude(original: Option<&str>, hook: &str, parts: ClaudeParts) ->
     let st = jsonedit::style(&s, &root);
 
     if parts.hooks {
-        for event in CLAUDE_EVENTS {
-            let root = jsonedit::parse(&s)?;
-            let Some(hooks) = root.get("hooks") else {
-                s = jsonedit::insert_member(&s, &root, 0, "hooks", &json!({}), &st);
-                let root = jsonedit::parse(&s)?;
-                s = jsonedit::insert_member(&s, root.get("hooks").unwrap(), 1, event, &json!([claude_group(hook, event)]), &st);
-                continue;
-            };
-            match hooks.get(event) {
-                Some(arr @ Node::Arr { .. }) => {
-                    if !text_of(&s, arr).contains(MARKER) {
-                        s = jsonedit::append_item(&s, arr, 2, &claude_group(hook, event), &st);
-                    }
-                }
-                Some(_) => return Err(format!("hooks.{event} is not an array")),
-                None => s = jsonedit::insert_member(&s, hooks, 1, event, &json!([claude_group(hook, event)]), &st),
-            }
-        }
+        s = add_groups(s, &CLAUDE_EVENTS, &st, |e| claude_group(hook, e))?;
     }
-
     if parts.statusline {
         let root = jsonedit::parse(&s)?;
         match root.get("statusLine") {

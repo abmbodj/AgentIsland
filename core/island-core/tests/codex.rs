@@ -35,20 +35,33 @@ fn codex_sessions_track_like_claude_ones() {
 }
 
 #[test]
-fn codex_hooks_never_wait_on_the_island() {
+fn attached_codex_hooks_never_wait_on_the_island() {
     let mut s = attached();
     assert_eq!(s.handle(&codex("PermissionRequest-Bash", json!({})), T0 + 1), None);
-    let mut d = Store::default();
-    assert_eq!(d.handle(&codex("PermissionRequest-Bash", json!({})), T0 + 1), None);
 }
 
 #[test]
-fn unattached_codex_approvals_become_handoff_cards_cleared_by_the_tool_finishing() {
+fn unattached_codex_approvals_wait_for_an_inline_allow_or_deny() {
     let mut s = Store::default();
-    s.handle(&codex("PermissionRequest-Bash", json!({})), T0);
+    let id = s.handle(&codex("PermissionRequest-Bash", json!({})), T0).expect("held");
     let a = only(&s).pending[0].clone();
-    assert!(!a.held, "native prompt answers it; the island hands off");
-    assert_eq!(only(&s).state, State::NeedsInput);
+    assert!(a.held && a.releasable);
+    assert!(!a.can_allow_session, "hooks can't grant session rules in Codex");
+    assert_eq!(a.note.as_deref(), Some("May I create codex-approve.txt in the workspace with escalated write access?"));
+    s.answer(id, Answer::Allow, T0 + 1);
+    let (rid, out) = s.take_replies().remove(0);
+    assert_eq!(rid, id);
+    assert_eq!(serde_json::from_str::<Value>(&out).unwrap()["hookSpecificOutput"]["decision"]["behavior"], "allow");
+}
+
+#[test]
+fn releasing_hands_the_prompt_back_to_codex() {
+    let mut s = Store::default();
+    let id = s.handle(&codex("PermissionRequest-Bash", json!({})), T0).unwrap();
+    s.release(id);
+    assert_eq!(s.take_replies(), vec![(id, String::new())], "empty reply: Codex shows its own prompt");
+    let a = only(&s).pending[0].clone();
+    assert!(!a.held, "card becomes a handoff");
     // PostToolUse input lacks the request's "description": match on the command.
     s.handle(&codex("PostToolUse-Bash", json!({})), T0 + 1);
     assert!(only(&s).pending.is_empty());

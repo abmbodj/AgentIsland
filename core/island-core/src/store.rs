@@ -44,6 +44,8 @@ pub struct Attention {
     pub subagent: Option<String>,
     /// The agent's own explanation ("May I create … with escalated write access?").
     pub note: Option<String>,
+    /// Held only while the user is away: release it to let the agent show its own prompt.
+    pub releasable: bool,
     /// Where the answer goes.
     #[serde(skip)]
     pub channel: Channel,
@@ -331,14 +333,17 @@ impl Store {
                 }
             }
             "PermissionRequest" if s.agent == "codex" => {
-                // Codex runs this hook before showing its own prompt, so never hold it. Attached
-                // sessions get an inline card from the app-server request that follows instead.
+                // Attached sessions get their card from the app-server request that follows.
+                // Otherwise hold the hook for an inline allow/deny; Codex shows its own prompt only
+                // after this hook returns, so the shell releases it as soon as the user is looking.
                 if !s.inline {
                     let mut a = attention(attention_id, tool, &p["tool_input"], now, None);
-                    a.held = false;
                     a.note = p["tool_input"]["description"].as_str().map(str::to_string);
+                    a.can_allow_session = false;
+                    a.releasable = true;
                     s.pending.push(a);
                     s.set(State::NeedsInput, now);
+                    return Some(attention_id);
                 }
             }
             "Interrupt" => {
@@ -431,6 +436,16 @@ impl Store {
         }
     }
 
+    /// Give a held, releasable item back to the agent's own UI (empty reply); the card stays as a handoff.
+    pub fn release(&mut self, id: u64) {
+        for s in &mut self.sessions {
+            for a in s.pending.iter_mut().filter(|a| a.id == id && a.held && a.releasable && a.channel == Channel::Hook) {
+                a.held = false;
+                self.replies.push((id, String::new()));
+            }
+        }
+    }
+
     /// Stop waiting on this item's hook (it was released empty); the card stays as a handoff.
     pub fn detach(&mut self, id: u64) {
         for s in &mut self.sessions {
@@ -518,6 +533,7 @@ impl Store {
             held: true,
             subagent: None,
             note: params["reason"].as_str().map(str::to_string),
+            releasable: false,
             channel: Channel::AppServer { conn, request_id },
         };
         match method {
@@ -729,6 +745,7 @@ fn attention(id: u64, tool: &str, input: &Value, now: Millis, subagent: Option<S
         held: true,
         subagent,
         note: None,
+        releasable: false,
         channel: Channel::Hook,
     }
 }
