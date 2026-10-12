@@ -9,10 +9,13 @@ enum Preferences {
         set { try? newValue ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister() }
     }
 
-    /// Something of ours is installed (the core's uninstall plan is non-empty).
-    static var claudeConnected: Bool {
-        ((try? CoreBridge.shared.call(["op": "planUninstall"])) as? [Any])?.isEmpty == false
+    /// Files we manage, from the core's install manifest.
+    private static var installedPaths: [String] {
+        ((try? CoreBridge.shared.call(["op": "planUninstall"])) as? [[String: Any]] ?? []).compactMap { $0["path"] as? String }
     }
+
+    static var claudeConnected: Bool { installedPaths.contains { $0.contains("/.claude/") } }
+    static var codexConnected: Bool { installedPaths.contains { $0.hasSuffix("/.codex/hooks.json") } }
 
     static var setupShown: Bool {
         get { UserDefaults.standard.bool(forKey: "setupShown") }

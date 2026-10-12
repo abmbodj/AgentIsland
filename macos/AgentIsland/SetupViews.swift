@@ -5,6 +5,7 @@ struct PlanItem: Decodable, Identifiable {
     var title: String
     var path: String
     var diff: String
+    var note: String?
 }
 
 struct UninstallItem: Decodable, Identifiable {
@@ -104,7 +105,7 @@ struct SetupView: View {
             ForEach(items) { item in
                 ChangeRow(
                     title: item.title,
-                    detail: (item.path as NSString).abbreviatingWithTildeInPath,
+                    detail: (item.path as NSString).abbreviatingWithTildeInPath + (item.note.map { "\n" + $0 } ?? ""),
                     diff: item.diff,
                     isOn: Binding(get: { selected.contains(item.id) }, set: { on in
                         if on { selected.insert(item.id) } else { selected.remove(item.id) }
@@ -243,6 +244,7 @@ struct SettingsView: View {
     @State private var openAtLogin = Preferences.openAtLogin
     @State private var autoUpdate = Updater.shared.automaticChecks
     @State private var connected = Preferences.claudeConnected
+    @State private var codexConnected = Preferences.codexConnected
     @AppStorage("autoExpand") private var autoExpand = true
     @AppStorage("hoverDelay") private var hoverDelay = 0.35
     @AppStorage("display") private var display = "active"
@@ -302,6 +304,12 @@ struct SettingsView: View {
                         Button(connected ? "Review…" : "Connect…", action: openSetup)
                     }
                 }
+                LabeledContent("Codex") {
+                    HStack {
+                        Text(codexConnected ? "Connected" : "Not connected").foregroundStyle(.secondary)
+                        Button(codexConnected ? "Review…" : "Connect…", action: openSetup)
+                    }
+                }
             }
             Section {
                 Button("Remove Integrations…", action: openUninstall)
@@ -309,7 +317,10 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 460)
-        .onAppear { connected = Preferences.claudeConnected }
+        .onAppear {
+            connected = Preferences.claudeConnected
+            codexConnected = Preferences.codexConnected
+        }
     }
 
     private func soundRow(_ title: String, on: Binding<Bool>, name: Binding<String>, kind: Sounds.Kind) -> some View {

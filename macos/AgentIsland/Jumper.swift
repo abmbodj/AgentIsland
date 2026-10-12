@@ -12,6 +12,7 @@ enum Jumper {
         case ghostty = "com.mitchellh.ghostty"
         case vscode = "com.microsoft.VSCode"
         case cursor = "com.todesktop.230313mzl4w4u92"
+        case codexDesktop = "com.openai.codex"
     }
 
     /// `done` runs on main with a short hint when the jump fell back to something less precise.
@@ -24,6 +25,11 @@ enum Jumper {
 
     private static func perform(_ s: SessionInfo) -> String? {
         let t = s.terminal
+        if s.agent == "codex" && t.bundleId == App.codexDesktop.rawValue,
+           let url = URL(string: "codex://threads/\(s.id)") {
+            NSWorkspace.shared.open(url) // the exact Desktop thread
+            return nil
+        }
         if let pane = t.tmuxPane, let env = t.tmux, let tmux = tmuxPath {
             return jumpTmux(tmux: tmux, socket: String(env.split(separator: ",").first ?? ""), pane: pane)
         }
@@ -39,6 +45,8 @@ enum Jumper {
             return focusGhostty(s)
         case .vscode, .cursor:
             return focusEditor(App(rawValue: bundle!)!, s)
+        case .codexDesktop:
+            return activate(bundle)
         case nil:
             return activate(bundle) ?? activateAncestor(of: t.pids)
         }

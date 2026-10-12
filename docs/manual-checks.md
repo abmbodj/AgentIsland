@@ -22,3 +22,9 @@ scripted real-agent runs described in each slice commit.
 ## Look
 - Panel reads as one dark object growing out of the notch; text legible; motion quick with no bounce.
 - System Settings → Accessibility → Display → Reduce motion: dots stop breathing (ring instead), panel cross-fades.
+
+## Codex (slice 4)
+- Set Up Integrations… → "Codex hooks" (adds `~/.codex/hooks.json` + trust lines in `config.toml`, shown as a diff).
+- **Codex CLI** (`codex` in any terminal): sessions appear; approvals/questions answer inline (with *Allow for session*); Codex's own prompt stays usable; first answer wins.
+- **Codex Desktop**: this Desktop build runs a private app-server, so approvals are held for an inline Allow/Deny *only while you're elsewhere*: switch to Codex (or click the row) and its own prompt appears instead. Questions show "Open in Codex" (`codex://threads/<id>`). Please confirm: start a Desktop task that needs approval while another app is frontmost.
+- Your config has `approval_policy = "never"`, so you will mostly see session tracking, Plan-mode questions and the Codex usage line.

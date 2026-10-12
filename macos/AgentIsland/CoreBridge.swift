@@ -22,6 +22,8 @@ struct SessionInfo: Decodable, Equatable, Identifiable {
     var subagents: [Subagent]
     var pid: Int32?
     var terminal: Terminal
+    /// Answers go through the agent's app-server (Codex daemon).
+    var inline: Bool
 }
 
 enum SessionState: String, Decodable {
@@ -42,6 +44,10 @@ struct Attention: Decodable, Equatable, Identifiable {
     /// The agent is waiting on us; otherwise the card can only hand off to the session.
     var held: Bool
     var subagent: String?
+    /// The agent's own explanation of why it asks.
+    var note: String?
+    /// Held only while you're away; released to the agent's own prompt when you look at it.
+    var releasable: Bool
 }
 
 struct DiffPreview: Decodable, Equatable {
@@ -51,10 +57,13 @@ struct DiffPreview: Decodable, Equatable {
 }
 
 struct Question: Decodable, Equatable {
+    var id: String
     var question: String
     var header: String
     var options: [QuestionOption]
     var multiSelect: Bool
+    var allowsOther: Bool
+    var secret: Bool
 }
 
 struct QuestionOption: Decodable, Equatable {

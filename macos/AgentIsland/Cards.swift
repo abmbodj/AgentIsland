@@ -145,6 +145,9 @@ private struct CardView: View {
     private var approval: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(item.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(ink)
+            if let note = item.note, !note.isEmpty {
+                Text(note).font(.system(size: 12)).foregroundStyle(secondary).fixedSize(horizontal: false, vertical: true)
+            }
             if !item.detail.isEmpty {
                 Text(item.detail)
                     .font(.system(size: 12, design: .monospaced))
@@ -174,6 +177,12 @@ private struct CardView: View {
             }
             HStack(spacing: 8) {
                 ResponseButton(model: model, id: "deny", item: item, title: "Deny", shortcut: "⌘N") { model.deny(item) }
+                if item.releasable {
+                    Button { model.onJump(session) } label: {
+                        Text("Answer in \(Fmt.agentName(session.agent))").font(.system(size: 12)).foregroundStyle(secondary).padding(.horizontal, 6)
+                    }
+                    .buttonStyle(.plain)
+                }
                 if item.canAllowSession {
                     ResponseButton(model: model, id: "session", item: item, title: "Allow for session") { model.allowSession(item) }
                 }
@@ -204,7 +213,17 @@ private struct CardView: View {
                     }
                 }
                 HStack(spacing: 8) {
-                    if model.summoned {
+                    if !q.allowsOther {
+                        EmptyView()
+                    } else if model.summoned && q.secret {
+                        SecureField("Type your answer", text: $model.freeText)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .padding(.horizontal, 8)
+                            .frame(height: 28)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.08)))
+                            .onSubmit { model.submitFreeText(item) }
+                    } else if model.summoned {
                         TextField("Type another answer", text: $model.freeText)
                             .textFieldStyle(.plain)
                             .font(.system(size: 12))
@@ -235,11 +254,14 @@ private struct CardView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(item.kind == "question" ? "Asks a question in the session" : item.title)
                 .font(.system(size: 15, weight: .semibold)).foregroundStyle(ink)
-            Text("This agent can only be answered where it runs.").font(.system(size: 12)).foregroundStyle(secondary)
+            if !item.detail.isEmpty {
+                Text(item.detail).font(.system(size: 12, design: .monospaced)).foregroundStyle(secondary).lineLimit(2)
+            }
+            Text("Answer it in \(Fmt.agentName(session.agent)).").font(.system(size: 12)).foregroundStyle(secondary)
             HStack {
                 Spacer()
                 Button { model.onJump(session) } label: {
-                    Text("Open session").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.black.opacity(0.85))
+                    Text(session.agent == "codex" && session.terminal.bundleId == "com.openai.codex" ? "Open in Codex" : "Open session").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.black.opacity(0.85))
                         .padding(.horizontal, 12).frame(height: 28)
                         .background(RoundedRectangle(cornerRadius: 8).fill(ink))
                 }

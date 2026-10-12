@@ -181,7 +181,7 @@ struct PanelView: View {
                 if model.snapshot.sessions.isEmpty {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("No agent sessions").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
-                        Text("Start Claude Code in any terminal and it appears here.").font(.system(size: 11)).foregroundStyle(secondary)
+                        Text("Start Claude Code or Codex and it appears here.").font(.system(size: 11)).foregroundStyle(secondary)
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)

@@ -112,7 +112,10 @@ final class IslandController {
         } as Any)
 
         let nc = NSWorkspace.shared.notificationCenter
-        observers.append((nc, nc.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.reposition() }))
+        observers.append((nc, nc.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.reposition()
+            self?.appActivated()
+        }))
         observers.append((nc, nc.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in self?.render(animated: false) }))
         observers.append((NotificationCenter.default, NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in self?.reposition() }))
 
@@ -174,9 +177,15 @@ final class IslandController {
         if let st = model.staged, !ids.contains(st.id) { model.staged = nil } // answered elsewhere meanwhile
         model.cardIndex = min(model.cardIndex, max(0, ids.count - 1))
         // New request: open, unless the user is already looking at that session (D35).
-        for s in snap.sessions where s.pending.contains(where: { !previousIDs.contains($0.id) }) && autoExpand && !snap.paused {
+        for s in snap.sessions where s.pending.contains(where: { !previousIDs.contains($0.id) }) && !snap.paused {
             Jumper.isLookingAt(s) { [weak self] looking in
-                guard let self, !looking, !self.snapshot.paused, self.snapshot.attention > 0 else { return }
+                guard let self else { return }
+                if looking {
+                    // You're already there: let the agent show its own prompt (D35).
+                    self.release(s)
+                    return
+                }
+                guard self.autoExpand, !self.snapshot.paused, self.snapshot.attention > 0 else { return }
                 self.autoOpened = true
                 self.setExpanded(true, pinned: self.pinned)
             }
@@ -313,7 +322,22 @@ final class IslandController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: w)
     }
 
+    /// Hand held-while-away requests back to the agent's own prompt.
+    private func release(_ s: SessionInfo) {
+        for a in s.pending where a.held && a.releasable {
+            CoreBridge.shared.send(["type": "release", "id": a.id])
+        }
+    }
+
+    /// When you switch to an app, release requests from sessions you're now looking at.
+    private func appActivated() {
+        for s in snapshot.sessions where s.pending.contains(where: { $0.held && $0.releasable }) {
+            Jumper.isLookingAt(s) { [weak self] looking in if looking { self?.release(s) } }
+        }
+    }
+
     private func jump(_ s: SessionInfo) {
+        release(s)
         CoreBridge.shared.send(["type": "viewed", "agent": s.agent, "id": s.id])
         Jumper.jump(s) { [weak self] hint in
             guard let self else { return }

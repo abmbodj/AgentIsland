@@ -29,7 +29,7 @@ A calm, notch-style status light for local AI coding agents: Claude Code and Cod
 - D11: Uninstall removes our text spans surgically. If nothing drifted, the result must hash-equal the install-time backup. If something drifted, show a diff, keep the foreign changes, and offer a secondary "Restore exact backup from <date>".
 - D10: The Claude statusLine becomes `island-hook statusline -- <original cmd>`. It tees the JSON fire-and-forget, then execs the original command with the same stdin.
 - D12: The Codex installer writes our hooks.json entries plus their `trusted_hash` span-edits in config.toml, all shown in the diff. If hooks are detected as untrusted, show a "run /hooks" card.
-- D30: Codex inline answers go through the shared app-server daemon.
+- D30 (slice-4 spike result: Codex Desktop 26.1002 starts a private app-server with config overrides even with `CODEX_APP_SERVER_USE_LOCAL_DAEMON=1`, so the LaunchAgent was not built; Desktop and daemon-less TUIs instead hold the PermissionRequest hook for inline allow/deny while the user is away and release it to Codex's own prompt as soon as they look; questions hand off): Codex inline answers go through the shared app-server daemon.
   - Connection: `~/.codex/app-server-control/app-server-control.sock`, WebSocket over a Unix socket, JSON-RPC without the `"jsonrpc"` field. Send `initialize{experimentalApi:true}`, then `initialized`.
   - Lifecycle: on a Codex SessionStart, call `thread/resume{threadId, excludeTurns:true}`. On SessionEnd, call `thread/unsubscribe`.
   - Answering: reply by request id. Clear the card on `serverRequest/resolved`. Usage comes from `account/rateLimits/updated`.
