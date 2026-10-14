@@ -3,7 +3,6 @@ import SwiftUI
 private let ink = Color(nsColor: Theme.ink)
 private let secondary = Color(nsColor: Theme.secondary)
 private let muted = Color(nsColor: Theme.muted)
-private let amber = Color(nsColor: Theme.amber)
 
 /// The one card that needs the user, above the session rows. Never stacked: "1 of 3" + ‹ ›.
 struct CardArea: View {
@@ -47,6 +46,7 @@ private struct ResponseButton: View {
     var shortcut: String? = nil
     var primary = false
     let action: () -> Void
+    @State private var hover = false
 
     var body: some View {
         let staged = model.staged
@@ -69,10 +69,11 @@ private struct ResponseButton: View {
             .foregroundStyle(primary && !mine ? Color.black.opacity(0.85) : ink)
             .padding(.horizontal, 12)
             .frame(height: 28)
-            .background(RoundedRectangle(cornerRadius: 8).fill(primary && !mine ? ink : Color.white.opacity(0.1)))
+            .background(RoundedRectangle(cornerRadius: 8).fill(primary && !mine ? ink.opacity(hover ? 1 : 0.92) : Color.white.opacity(hover ? 0.16 : 0.1)))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(IslandButtonStyle())
+        .onHover { hover = $0 }
         .disabled(staged != nil && !mine)
         .opacity(staged != nil && !mine ? 0.35 : 1)
         .accessibilityLabel(mine ? "Undo" : title)
@@ -119,22 +120,25 @@ private struct CardView: View {
 
     private var header: some View {
         HStack(spacing: 7) {
-            Circle().fill(amber).frame(width: 6, height: 6)
+            AgentBadge(agent: session.agent, state: .needsInput, size: 13)
+                .frame(width: 15, height: 15)
             Text(session.project.isEmpty ? "Session" : session.project)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(ink)
                 .lineLimit(1)
-            Text(item.subagent.map { "\($0) subagent" } ?? Fmt.agentName(session.agent))
-                .font(.system(size: 12))
-                .foregroundStyle(secondary)
-                .lineLimit(1)
+            if let sub = item.subagent {
+                Text("\(sub) subagent")
+                    .font(.system(size: 12))
+                    .foregroundStyle(secondary)
+                    .lineLimit(1)
+            }
             Spacer(minLength: 6)
             if count > 1 {
-                Button { model.move(-1) } label: { Image(systemName: "chevron.left") }
-                    .buttonStyle(.plain).foregroundStyle(secondary).accessibilityLabel("Previous request")
+                Button { model.move(-1) } label: { Image(systemName: "chevron.left").frame(width: 18, height: 18).contentShape(Rectangle()) }
+                    .buttonStyle(IslandButtonStyle(radius: 5)).foregroundStyle(secondary).accessibilityLabel("Previous request")
                 Text("\(index + 1) of \(count)").font(.system(size: 11).monospacedDigit()).foregroundStyle(secondary)
-                Button { model.move(1) } label: { Image(systemName: "chevron.right") }
-                    .buttonStyle(.plain).foregroundStyle(secondary).accessibilityLabel("Next request")
+                Button { model.move(1) } label: { Image(systemName: "chevron.right").frame(width: 18, height: 18).contentShape(Rectangle()) }
+                    .buttonStyle(IslandButtonStyle(radius: 5)).foregroundStyle(secondary).accessibilityLabel("Next request")
             }
         }
         .accessibilityElement(children: .combine)
@@ -179,9 +183,9 @@ private struct CardView: View {
                 ResponseButton(model: model, id: "deny", item: item, title: "Deny", shortcut: "⌘N") { model.deny(item) }
                 if item.releasable {
                     Button { model.onJump(session) } label: {
-                        Text("Answer in \(Fmt.agentName(session.agent))").font(.system(size: 12)).foregroundStyle(secondary).padding(.horizontal, 6)
+                        Text("Answer in \(Fmt.agentName(session.agent))").font(.system(size: 12)).foregroundStyle(secondary).padding(.horizontal, 6).frame(height: 28).contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(IslandButtonStyle())
                 }
                 if item.canAllowSession {
                     ResponseButton(model: model, id: "session", item: item, title: "Allow for session") { model.allowSession(item) }
@@ -234,9 +238,9 @@ private struct CardView: View {
                     } else {
                         Button { model.onSummon() } label: {
                             Text("Type another answer…").font(.system(size: 12)).foregroundStyle(secondary)
-                                .padding(.horizontal, 8).frame(height: 28)
+                                .padding(.horizontal, 8).frame(height: 28).contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(IslandButtonStyle())
                     }
                     if q.multiSelect {
                         Spacer()
@@ -265,7 +269,7 @@ private struct CardView: View {
                         .padding(.horizontal, 12).frame(height: 28)
                         .background(RoundedRectangle(cornerRadius: 8).fill(ink))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(IslandButtonStyle())
             }
         }
     }
@@ -308,7 +312,7 @@ private struct OptionRow: View {
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(hover || picked || mine ? 0.08 : 0)))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(IslandButtonStyle())
         .onHover { hover = $0 }
         .disabled(staged != nil && !mine)
         .opacity(staged != nil && !mine ? 0.35 : 1)

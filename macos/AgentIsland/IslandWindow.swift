@@ -148,6 +148,13 @@ final class IslandController {
         observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.expand"), object: nil, queue: .main) { [weak self] n in
             self?.setExpanded((n.object as? String) != "collapse", pinned: true)
         }))
+        // Writes a PNG of the island window to the given path (no Screen Recording permission needed).
+        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.snapshot"), object: nil, queue: .main) { [weak self] n in
+            guard let path = n.object as? String, let v = self?.panel.contentView,
+                  let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return }
+            v.cacheDisplay(in: v.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        }))
         #endif
     }
 
