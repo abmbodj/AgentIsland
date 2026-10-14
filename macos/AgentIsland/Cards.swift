@@ -69,7 +69,7 @@ private struct ResponseButton: View {
             .foregroundStyle(primary && !mine ? Color.black.opacity(0.85) : ink)
             .padding(.horizontal, 12)
             .frame(height: 28)
-            .background(RoundedRectangle(cornerRadius: 8).fill(primary && !mine ? ink.opacity(hover ? 1 : 0.92) : Color.white.opacity(hover ? 0.16 : 0.1)))
+            .background(RoundedRectangle(cornerRadius: 8).fill(primary && !mine ? ink : Color.white.opacity(hover ? 0.16 : 0.1)))
             .contentShape(Rectangle())
         }
         .buttonStyle(IslandButtonStyle())
@@ -122,6 +122,7 @@ private struct CardView: View {
         HStack(spacing: 7) {
             AgentBadge(agent: session.agent, state: .needsInput, size: 13)
                 .frame(width: 15, height: 15)
+                .accessibilityValue("Needs your input")
             Text(session.project.isEmpty ? "Session" : session.project)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(ink)

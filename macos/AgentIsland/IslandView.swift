@@ -29,6 +29,8 @@ final class IslandView: NSView {
     private(set) var hasNotch = true
     private let dot: CGFloat = 6, gap: CGFloat = 6, pad: CGFloat = 11, ear: CGFloat = 6, maxDots = 6
     static let panelWidth: CGFloat = 440
+    /// Room below the notch for the dropped-down panel (see `IslandController.reposition`).
+    static let panelMaxHeight: CGFloat = 460
 
     /// Fixed coordinate space for all drawing ("envelope"); the window only covers `islandRect` of it.
     var envelope = CGSize(width: 620, height: 492)

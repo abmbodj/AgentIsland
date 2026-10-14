@@ -175,10 +175,10 @@ private struct HeightKey: PreferenceKey {
 
 struct PanelView: View {
     @ObservedObject var model: PanelModel
-    /// Approximate session row height; the list scrolls past `maxRows`.
-    static let rowHeight: CGFloat = 47
-    /// ponytail: a pending card takes most of the panel, so rows scroll sooner; measure the card if 3 feels tight.
-    private var maxRows: Int { model.current == nil ? 7 : 3 }
+    /// Measured so the rows get whatever height the card and usage strip leave, and scroll past that.
+    @State private var cardHeight: CGFloat = 0
+    @State private var rowsHeight: CGFloat = 0
+    @State private var stripHeight: CGFloat = 0
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: model.isOpen ? 1 : 3600)) { ctx in
@@ -196,14 +196,19 @@ struct PanelView: View {
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-                } else if model.snapshot.sessions.count > maxRows {
-                    CardArea(model: model)
-                    ScrollView { rows(ctx.date) }.frame(height: CGFloat(min(5, maxRows)) * Self.rowHeight)
                 } else {
-                    CardArea(model: model)
-                    rows(ctx.date)
+                    VStack(alignment: .leading, spacing: 0) { CardArea(model: model) }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0 }
+                    // Panel padding is 4 top + 10 bottom.
+                    let room = max(60, IslandView.panelMaxHeight - 14 - cardHeight - stripHeight)
+                    ScrollView {
+                        rows(ctx.date)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowsHeight = $0 }
+                    }
+                    .frame(height: rowsHeight == 0 ? nil : min(rowsHeight, room))
                 }
                 UsageStrip(usage: model.snapshot.usage, now: ctx.date)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stripHeight = $0 }
             }
         }
         .padding(.horizontal, 8)
@@ -302,8 +307,9 @@ private struct SessionRow: View {
         .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(pressed ? 0.11 : hover ? 0.07 : 0)))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
-        .onLongPressGesture(minimumDuration: .infinity, pressing: { pressed = $0 }, perform: {})
-        .simultaneousGesture(TapGesture().onEnded { model.onJump(session) })
+        // Press tint only; the tap stays a plain onTapGesture so the subagent chip's button still wins its own clicks.
+        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in pressed = true }.onEnded { _ in pressed = false })
+        .onTapGesture { model.onJump(session) }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Shows this session's terminal")
