@@ -172,7 +172,7 @@ final class IslandView: NSView {
                 f.duration = 0.1
                 f.fillMode = .backwards
                 l.add(f, forKey: "fade")
-            } else {
+            } else if !hidden {
                 l.removeAnimation(forKey: "fade")
             }
             if animate, let from, let path {
