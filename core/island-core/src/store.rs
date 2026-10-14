@@ -405,10 +405,10 @@ impl Store {
                 };
                 // Failing that, a field may be missing but none may differ: the desktop's ExitPlanMode
                 // completes without the plan its approval carried, while a parallel `ls` must not
-                // clear a pending `rm`.
+                // clear a pending `rm`. A plan approval is one at a time and its plan may be edited.
                 let fits = |a: &Attention| {
-                    a.tool == tool && a.input.as_object().filter(|m| !m.is_empty())
-                        .is_some_and(|m| m.iter().all(|(k, v)| post.get(k).is_none_or(|p| p == v)))
+                    a.tool == tool && (tool == "ExitPlanMode" || a.input.as_object().filter(|m| !m.is_empty())
+                        .is_some_and(|m| m.iter().all(|(k, v)| post.get(k).is_none_or(|p| p == v))))
                 };
                 let found = s.pending.iter().position(|a| a.channel == Channel::Hook && same(a))
                     .or_else(|| s.pending.iter().position(|a| a.channel == Channel::Hook && fits(a)));

@@ -89,11 +89,16 @@ fn plan_approval_clears_when_the_tool_completes_with_a_different_input() {
     // The desktop app's ExitPlanMode request carries the plan; the completed tool's input does not.
     let mut s = store_with_session();
     let plan = json!({"tool_name": "ExitPlanMode", "tool_input": {"plan": "# Plan", "planFilePath": "/tmp/p.md"}});
-    s.handle(&claude("PermissionRequest-Bash", plan), T0 + 1);
+    s.handle(&claude("PermissionRequest-Bash", plan.clone()), T0 + 1);
     assert_eq!(s.snapshot().attention, 1);
     s.handle(&claude("PostToolUse-Bash", json!({"tool_name": "ExitPlanMode", "tool_input": {}})), T0 + 2);
     assert_eq!(s.snapshot().attention, 0);
     assert_eq!(only(&s).state, State::Working);
+
+    // Approved after editing the plan in the app.
+    s.handle(&claude("PermissionRequest-Bash", plan), T0 + 3);
+    s.handle(&claude("PostToolUse-Bash", json!({"tool_name": "ExitPlanMode", "tool_input": {"plan": "# Edited"}})), T0 + 4);
+    assert_eq!(s.snapshot().attention, 0);
 }
 
 #[test]
