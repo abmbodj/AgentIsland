@@ -132,7 +132,7 @@ struct PRButton: View {
             let base = model.prBase[session.id] ?? r.base
             // One capsule: the action on the left, the base branch it targets on the right.
             HStack(spacing: 0) {
-                Chip(card: card, joined: .leading) { model.startPR(session) } label: { Text("Open PR") }
+                Chip(card: card, squared: .trailing) { model.startPR(session) } label: { Text("Open PR") }
                     .accessibilityLabel("Open pull request")
                     .accessibilityHint("Creates a pull request into \(base) after a 2 second undo window")
                 basePicker(r, base: base)
@@ -162,16 +162,16 @@ struct PRButton: View {
             .accessibilityHint("Opens it in your browser")
         case .failed(_, let reason):
             HStack(spacing: 6) {
-                // Gives way first, so the row's status stays whole; the full reason is on hover.
                 Text(reason).font(.system(size: card ? 12 : 11)).foregroundStyle(secondary)
                     .lineLimit(1).truncationMode(.tail)
                     .frame(maxWidth: card ? 220 : 150, alignment: .trailing)
-                    .layoutPriority(-1)
                     .help(reason)
                     .accessibilityLabel("Pull request failed: \(reason)")
                 Chip(card: card) { model.retryPR(session) } label: { Text("Retry") }
                     .accessibilityLabel("Retry the pull request")
             }
+            // Gives way first, so the row's status stays whole; the full reason is on hover.
+            .layoutPriority(-1)
         case nil:
             EmptyView()
         }
@@ -184,7 +184,6 @@ struct PRButton: View {
             if r.bases.count > 1 { Image(systemName: "chevron.down").font(.system(size: card ? 8 : 7, weight: .semibold)) }
         }
         .font(.system(size: card ? 12 : 11))
-        .foregroundStyle(secondary)
         if r.bases.count > 1 {
             // A real NSMenu pops without activating the app, so it works in the non-activating panel.
             Menu {
@@ -194,7 +193,7 @@ struct PRButton: View {
                 .pickerStyle(.inline)
                 .labelsHidden()
             } label: {
-                ChipBody(card: card, joined: .trailing) { label }
+                ChipBody(card: card, squared: .leading) { label }
             }
             .menuStyle(.button)
             .buttonStyle(.plain)
@@ -203,22 +202,22 @@ struct PRButton: View {
             .help("Choose the base branch")
             .accessibilityLabel("Base branch, \(base)")
         } else {
-            ChipBody(card: card, joined: .trailing, interactive: false) { label }
+            ChipBody(card: card, squared: .leading, interactive: false) { label }
                 .accessibilityLabel("Into \(base)")
         }
     }
 }
 
 /// A capsule chip: compact (11 pt, subagent-chip size) in rows, 12 pt × 28 pt in cards.
-/// `joined` squares the edge that butts against a neighbour, so two chips read as one split control.
+/// `squared` is the edge that butts against a neighbour, so two chips read as one split control.
 private struct Chip<L: View>: View {
     let card: Bool
-    var joined: Edge? = nil
+    var squared: Edge? = nil
     let action: () -> Void
     @ViewBuilder let label: L
 
     var body: some View {
-        Button(action: action) { ChipBody(card: card, joined: joined) { HStack(spacing: 5) { label } } }
+        Button(action: action) { ChipBody(card: card, squared: squared) { HStack(spacing: 5) { label } } }
             .buttonStyle(IslandButtonStyle(radius: card ? 8 : 7.5))
             .fixedSize()
     }
@@ -226,7 +225,7 @@ private struct Chip<L: View>: View {
 
 private struct ChipBody<C: View>: View {
     let card: Bool
-    var joined: Edge? = nil
+    var squared: Edge? = nil
     var interactive = true
     @ViewBuilder let content: C
     @State private var hover = false
@@ -240,13 +239,13 @@ private struct ChipBody<C: View>: View {
             .frame(height: card ? 28 : 15)
             .background(
                 UnevenRoundedRectangle(
-                    topLeadingRadius: joined == .trailing ? 0 : r, bottomLeadingRadius: joined == .trailing ? 0 : r,
-                    bottomTrailingRadius: joined == .leading ? 0 : r, topTrailingRadius: joined == .leading ? 0 : r)
+                    topLeadingRadius: squared == .leading ? 0 : r, bottomLeadingRadius: squared == .leading ? 0 : r,
+                    bottomTrailingRadius: squared == .trailing ? 0 : r, topTrailingRadius: squared == .trailing ? 0 : r)
                     .fill(Color.white.opacity(hover && interactive ? (card ? 0.16 : 0.12) : (card ? 0.1 : 0.07)))
             )
             .overlay(alignment: .leading) {
                 // Hairline divider between the two halves of a split control.
-                if joined == .trailing { Rectangle().fill(Color.white.opacity(0.1)).frame(width: 1).padding(.vertical, card ? 7 : 3) }
+                if squared == .leading { Rectangle().fill(Color.white.opacity(0.1)).frame(width: 1).padding(.vertical, card ? 7 : 3) }
             }
             .contentShape(Rectangle())
             .onHover { hover = $0 }
