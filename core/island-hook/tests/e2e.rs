@@ -377,8 +377,13 @@ fn codex_session_attaches_to_its_daemon_and_answers_inline() {
     };
     assert_eq!(reply, serde_json::json!({"id": 0, "result": {"decision": "acceptForSession"}}));
 
-    // Rate limits arrive as notifications.
-    d.to_client.send(codex_fixture("appserver-rateLimits")).unwrap();
+    // Rate limits arrive as notifications. Shift the recorded reset times into the future, or
+    // the core (correctly) drops them as expired and this test ages out.
+    let mut limits = codex_fixture("appserver-rateLimits");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    limits["params"]["rateLimits"]["primary"]["resetsAt"] = (now + 3600).into();
+    limits["params"]["rateLimits"]["secondary"]["resetsAt"] = (now + 5 * 86400).into();
+    d.to_client.send(limits).unwrap();
     let snap = wait_for(&h, |s| !s["usage"]["codex"].is_null());
     assert_eq!(snap["usage"]["codex"]["windows"][1]["label"], "wk");
 }
