@@ -85,6 +85,18 @@ fn permission_request_needs_input_until_the_tool_completes() {
 }
 
 #[test]
+fn plan_approval_clears_when_the_tool_completes_with_a_different_input() {
+    // The desktop app's ExitPlanMode request carries the plan; the completed tool's input does not.
+    let mut s = store_with_session();
+    let plan = json!({"tool_name": "ExitPlanMode", "tool_input": {"plan": "# Plan", "planFilePath": "/tmp/p.md"}});
+    s.handle(&claude("PermissionRequest-Bash", plan), T0 + 1);
+    assert_eq!(s.snapshot().attention, 1);
+    s.handle(&claude("PostToolUse-Bash", json!({"tool_name": "ExitPlanMode", "tool_input": {}})), T0 + 2);
+    assert_eq!(s.snapshot().attention, 0);
+    assert_eq!(only(&s).state, State::Working);
+}
+
+#[test]
 fn tool_activity_while_waiting_for_input_keeps_needs_input() {
     let mut s = store_with_session();
     s.handle(&claude("PermissionRequest-Bash", json!({})), T0 + 2);
@@ -238,6 +250,15 @@ fn terminal_identity_is_captured() {
     assert_eq!(t.tty.as_deref(), Some("ttys001"));
     assert_eq!(t.tmux_pane.as_deref(), Some("%0"));
     assert_eq!(t.program.as_deref(), Some("tmux"));
+}
+
+#[test]
+fn desktop_host_session_id_is_captured() {
+    let mut s = Store::default();
+    let mut m = claude("SessionStart", json!({}));
+    m.env.insert("CLAUDE_CODE_HOST_SESSION_ID".into(), "local_17a9f453-e7a4".into());
+    s.handle(&m, T0);
+    assert_eq!(only(&s).terminal.host_session.as_deref(), Some("local_17a9f453-e7a4"));
 }
 
 #[test]

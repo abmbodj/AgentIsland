@@ -123,6 +123,7 @@ pub fn interactive(comm: &str, cwd: &str) -> Option<Found> {
             tmux_pane: e("TMUX_PANE"),
             iterm_session: e("ITERM_SESSION_ID"),
             term_session: e("TERM_SESSION_ID"),
+            host_session: None,
             pids,
         },
     })

@@ -12,6 +12,7 @@ use std::time::Duration;
 const ENV_KEYS: &[&str] = &[
     "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID", "ITERM_SESSION_ID", "TMUX", "TMUX_PANE",
     "__CFBundleIdentifier", "CLAUDE_PID", "WT_SESSION", "VSCODE_PID", "GHOSTTY_RESOURCES_DIR", "CODEX_HOME",
+    "CLAUDE_CODE_HOST_SESSION_ID",
 ];
 
 fn socket_path() -> PathBuf {

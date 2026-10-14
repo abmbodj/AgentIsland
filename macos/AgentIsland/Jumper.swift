@@ -13,6 +13,7 @@ enum Jumper {
         case vscode = "com.microsoft.VSCode"
         case cursor = "com.todesktop.230313mzl4w4u92"
         case codexDesktop = "com.openai.codex"
+        case claudeDesktop = "com.anthropic.claudefordesktop"
     }
 
     /// `done` runs on main with a short hint when the jump fell back to something less precise.
@@ -30,6 +31,13 @@ enum Jumper {
             NSWorkspace.shared.open(url) // the exact Desktop thread
             return nil
         }
+        // The Claude desktop app's exact session; the id is checked against the app's own pattern.
+        if t.bundleId == App.claudeDesktop.rawValue, let id = t.hostSession,
+           id.range(of: "^local_[A-Za-z0-9-]{1,64}$", options: .regularExpression) != nil,
+           let url = URL(string: "claude://code/continue?session=\(id)") {
+            NSWorkspace.shared.open(url)
+            return nil
+        }
         if let pane = t.tmuxPane, let env = t.tmux, let tmux = tmuxPath {
             return jumpTmux(tmux: tmux, socket: String(env.split(separator: ",").first ?? ""), pane: pane)
         }
@@ -45,14 +53,14 @@ enum Jumper {
             return focusGhostty(s)
         case .vscode, .cursor:
             return focusEditor(App(rawValue: bundle!)!, s)
-        case .codexDesktop:
+        case .codexDesktop, .claudeDesktop:
             return activate(bundle)
         case nil:
             return activate(bundle) ?? activateAncestor(of: t.pids)
         }
     }
 
-    // MARK: Looking at it already? (D35: no auto-expand, no chime)
+    // MARK: Looking at it already? (D35: no auto-expand; chimes play regardless)
 
     /// Whether the user is looking at this session right now: its app is frontmost and, where the
     /// terminal can tell us, its exact tab/pane is the selected one.

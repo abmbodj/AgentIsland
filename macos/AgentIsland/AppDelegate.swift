@@ -86,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var displayChoice = ""
     private var lastSnapshot = Snapshot()
 
-    /// Sound cues on transitions into Needs input / Finished, unless you're looking at that session.
+    /// Sound cues on transitions into Needs input / Finished, even while you're looking at that session.
     private func playCues(old: Snapshot, new: Snapshot) {
         guard !new.paused else { return }
         let oldPending = Set(old.sessions.flatMap { $0.pending.map(\.id) })
@@ -101,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 kind = nil
             }
             guard let kind, Sounds.enabled(kind) else { continue }
-            Jumper.isLookingAt(s) { looking in if !looking { Sounds.play(kind) } }
+            Sounds.play(kind)
         }
     }
 

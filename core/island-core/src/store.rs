@@ -144,6 +144,8 @@ pub struct Terminal {
     pub tmux_pane: Option<String>,
     pub iterm_session: Option<String>,
     pub term_session: Option<String>,
+    /// The Claude desktop app's own id for the session (`local_…`), for its deep link.
+    pub host_session: Option<String>,
     /// Hook's ancestors, nearest first.
     pub pids: Vec<i32>,
 }
@@ -159,6 +161,7 @@ impl Terminal {
             tmux_pane: e("TMUX_PANE"),
             iterm_session: e("ITERM_SESSION_ID"),
             term_session: e("TERM_SESSION_ID"),
+            host_session: e("CLAUDE_CODE_HOST_SESSION_ID"),
             pids: msg.pids.iter().map(|p| p.pid).collect(),
         }
     }
@@ -400,7 +403,12 @@ impl Store {
                             _ => a.input.as_object().filter(|m| !m.is_empty()).map_or(a.input == *post, |m| m.iter().all(|(k, v)| post.get(k) == Some(v))),
                         }
                 };
-                if let Some(i) = s.pending.iter().position(|a| a.channel == Channel::Hook && same(a)) {
+                // A tool only runs once its permission is settled, so with no exact match the oldest
+                // card for the same tool was answered elsewhere (ExitPlanMode's input loses its plan).
+                // ponytail: by tool name only; parallel same-tool calls may clear in a different order.
+                let found = s.pending.iter().position(|a| a.channel == Channel::Hook && same(a))
+                    .or_else(|| s.pending.iter().position(|a| a.channel == Channel::Hook && a.tool == tool));
+                if let Some(i) = found {
                     let a = s.pending.remove(i);
                     if a.held {
                         replies.push((a.id, String::new()));
