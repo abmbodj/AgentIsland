@@ -424,6 +424,16 @@ impl Store {
                 clear_pending(s, replies);
                 s.set(State::Idle, now);
             }
+            "PermissionRequest" if tool == "ExitPlanMode" && agent_id.is_none() && s.terminal.host_session.is_some() => {
+                // The desktop app ignores a hook's allow for its plan card: only the app can accept
+                // the plan, so hand off and let the hook return without a decision.
+                s.pending.push(Attention {
+                    held: false,
+                    can_allow_session: false,
+                    ..attention(attention_id, tool, &p["tool_input"], now, None)
+                });
+                s.set(State::NeedsInput, now);
+            }
             "PermissionRequest" => {
                 let subagent = agent_id.map(|aid| {
                     s.subagents.iter().find(|a| a.id == aid).map(|a| a.kind.clone())
@@ -867,7 +877,7 @@ fn attention(id: u64, tool: &str, input: &Value, now: Millis, subagent: Option<S
         detail,
         diff: diff::preview(tool, input),
         questions,
-        can_allow_session: kind == "approval" && tool != "ExitPlanMode",
+        can_allow_session: kind == "approval",
         held: true,
         subagent,
         note: None,
@@ -908,7 +918,11 @@ fn codex_result(a: &Attention, answer: &Answer) -> Value {
 fn reply_for(a: &Attention, answer: &Answer) -> String {
     let decision = match answer {
         Answer::Allow => json!({"behavior": "allow"}),
+        Answer::Deny if a.tool == "ExitPlanMode" => json!({"behavior": "deny", "message": "Keep planning: the user declined this plan from Agent Island"}),
         Answer::Deny => json!({"behavior": "deny", "message": "Denied from Agent Island"}),
+        // "Accept and auto-edits": accept the plan and leave plan mode for edit-approving mode.
+        Answer::AllowSession if a.tool == "ExitPlanMode" => json!({"behavior": "allow", "updatedPermissions": [
+            {"type": "setMode", "mode": "acceptEdits", "destination": "session"}]}),
         Answer::AllowSession => {
             let mut rule = json!({"toolName": a.tool});
             if a.tool == "Bash" {
