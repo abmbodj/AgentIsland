@@ -179,12 +179,12 @@ struct PRButton: View {
 
     @ViewBuilder private func basePicker(_ r: PRReady, base: String) -> some View {
         let label = HStack(spacing: 3) {
-            Text("→ \(base)").lineLimit(1).truncationMode(.middle)
+            // ponytail: middle-elided by character count, since the chip is fixed-size and can't truncate itself.
+            Text("→ \(base.count > 22 ? base.prefix(10) + "…" + base.suffix(10) : base)").lineLimit(1)
             if r.bases.count > 1 { Image(systemName: "chevron.down").font(.system(size: card ? 8 : 7, weight: .semibold)) }
         }
         .font(.system(size: card ? 12 : 11))
         .foregroundStyle(secondary)
-        .frame(maxWidth: 120)
         if r.bases.count > 1 {
             // A real NSMenu pops without activating the app, so it works in the non-activating panel.
             Menu {
