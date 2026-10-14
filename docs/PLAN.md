@@ -16,7 +16,7 @@ A calm, notch-style status light for local AI coding agents: Claude Code and Cod
 - D1 (implementation note: the shell boundary is a 4-function C ABI exchanging JSON, `core/island-core/include/island_core.h`, used by Swift now and C# later; this replaced UniFFI, which has no first-party C# binding): Rust core library (session store, state machine, adapters, socket server, installer, Codex app-server client), plus a tiny static Rust `island-hook` CLI. macOS shell is Swift/AppKit+SwiftUI, linked through UniFFI. The core keeps a stable C ABI for Windows.
 - D2/D36: `~/Desktop/AgentShelf2` is a real git repo, with a **public** GitHub repo `abmbodj/AgentShelf2`. Commits go straight to main. **I pause for the user's OK after each slice.**
 - D5: At slice 0, `brew install rustup tmux xcodegen` and `brew install --cask iterm2 ghostty`. rustup gets the aarch64 and x86_64 darwin targets.
-- D6: macOS 14+. Liquid Glass on 26+, NSVisualEffectView fallback.
+- D6: macOS 14+. (Material superseded 2026-10-14: after reviewing Liquid Glass on screen at tints 0.45/0.35/0.20, the user chose a solid black panel; no glass or blur on any version.)
 - D7: Developer ID signing, hardened runtime plus the apple-events entitlement, notarize, staple, DMG, and a Sparkle 2 EdDSA appcast on GitHub Releases (`scripts/release.sh`). The first-run toggle "Automatically check for updates" defaults ON and is labelled as the only network request. Not the Mac App Store. The user creates the Developer ID cert and notarytool credentials.
 - D20: Name **Agent Island**, bundle `com.abmbodj.agentisland`, support dir `~/Library/Application Support/AgentIsland/`. We draw our own agent glyphs; no vendor logos.
 - D27: Windows shell is C# WPF on .NET 8 over the Rust C ABI, confirmed by a 1-day spike at the start of slice 5. Testing happens on the user's separate Windows PC (D26). Windows release builds come from GitHub Actions.
@@ -59,7 +59,7 @@ Subagents (SubagentStart/Stop, agent_id) are children of the session and never c
 **UI**
 - D19: With 0 sessions the pill is pure black and notch-sized, so it's invisible. The right wing has one 6 pt glyph per top-level session, up to 6 then "+N". The left wing (● + count) appears only when something is amber. Non-notch displays, external displays and Windows get a slim floating pill at top center, hidden at 0 sessions. D18: the hover zone is the whole notch.
 - D31: Working is a neutral off-white dot with a 1.6 s breathing opacity (a static ring under reduced motion). Idle is the same dot at 35% opacity. Amber is used only for Needs input, and green only for Finished. Every state pairs a glyph with its color.
-- D32: The panel is always dark glass (Liquid Glass dark / `.hudWindow`), and grows out of the notch as one object.
+- D32: The panel is solid notch black (revised 2026-10-14 from dark glass), and grows out of the notch as one object.
 - D23: Hover opens after 350 ms (adjustable 0–1000). Click pins it open. Needs input auto-expands without taking focus. It collapses 400 ms after the pointer leaves, unless pinned, a card is pending, or it was summoned. An auto-expanded card stays until answered or until a click outside, then collapses to the amber wing.
 - D22: The island follows the active screen. Settings offers: Follow active / Built-in only / Specific / All.
 - Rows show project (cwd basename), agent glyph, activity, elapsed and state.

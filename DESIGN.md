@@ -10,7 +10,7 @@ description: A calm notch-style status light for local AI coding agents.
 
 A single dark object that grows out of the notch. Restrained color, system typography, quick un-bouncy motion. It should feel like part of the Mac's hardware, the way the Dynamic Island feels like part of the iPhone. References: Apple Dynamic Island, macOS Control Center glass, a car's instrument cluster at night (indicators that stay dark until they matter). Anti-reference: observability dashboards and notification centers.
 
-Physical scene: a developer at a MacBook, eyes on an editor in whatever light the room has, catching the notch in peripheral vision for under a second. The pill must be invisible against the notch when nothing is happening; the panel is always dark so the island reads as one object (D32).
+Physical scene: a developer at a MacBook, eyes on an editor in whatever light the room has, catching the notch in peripheral vision for under a second. The pill must be invisible against the notch when nothing is happening; the expanded panel is the same solid notch black, so the island reads as one physical object (D32, chosen over Liquid Glass after an on-screen review).
 
 ## 2. Colors: The Indicator Rule
 
@@ -22,7 +22,7 @@ Single sans: the system font (SF Pro / Segoe UI Variable on Windows), SF Mono fo
 
 ## 4. Elevation
 
-Flat tonal layering inside dark glass (Liquid Glass on macOS 26+, `.hudWindow` vibrancy on 14–15). No drop shadows inside the panel; one soft ambient shadow under the island as a whole.
+Flat. The whole island is opaque notch black (no glass, no blur, no shadow); hierarchy inside the panel comes from text weight and faint white lifts (6–8%) for hover and inset blocks.
 
 ## 5. Components
 

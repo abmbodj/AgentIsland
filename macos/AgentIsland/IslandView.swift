@@ -3,7 +3,7 @@ import QuartzCore
 import SwiftUI
 
 /// The island: one black object that is the notch, grows wings when sessions exist, and drops
-/// down into a dark glass panel when expanded. Lives in a fixed transparent window; only the
+/// down into a solid black panel when expanded (D32: always notch-black, one continuous object). Lives in a fixed transparent window; only the
 /// visible shape receives the mouse (the controller toggles `ignoresMouseEvents`).
 /// Panels are never key unless summoned, so SwiftUI controls must take the very first click.
 final class FirstMouseHostingView<V: View>: NSHostingView<V> {
@@ -12,11 +12,7 @@ final class FirstMouseHostingView<V: View>: NSHostingView<V> {
 
 final class IslandView: NSView {
     // Layers / views, back to front.
-    private let effect = NSVisualEffectView()
-    private let effectMask = CAShapeLayer()
     private let fill = CAShapeLayer()
-    private let band = CAGradientLayer()
-    private let bandMask = CAShapeLayer()
     private let pill = CALayer()
     let hosting: FirstMouseHostingView<PanelView>
 
@@ -52,25 +48,13 @@ final class IslandView: NSView {
         wantsLayer = true
         layer = CALayer()
 
-        effect.material = .hudWindow
-        effect.blendingMode = .behindWindow
-        effect.state = .active
-        effect.appearance = NSAppearance(named: .darkAqua)
-        effect.wantsLayer = true
-        effect.layer?.mask = effectMask
-        effect.alphaValue = 0
-        addSubview(effect)
 
         let shapeView = NSView()
         shapeView.wantsLayer = true
         shapeView.layer = CALayer()
         shapeView.autoresizingMask = [.width, .height]
         fill.fillColor = Theme.notchBlack.cgColor
-        band.colors = [Theme.notchBlack.cgColor, Theme.notchBlack.cgColor, Theme.notchBlack.withAlphaComponent(0).cgColor]
-        band.mask = bandMask
-        band.opacity = 0
         shapeView.layer?.addSublayer(fill)
-        shapeView.layer?.addSublayer(band)
         shapeView.layer?.addSublayer(pill)
         addSubview(shapeView)
         self.shapeView = shapeView
@@ -108,7 +92,6 @@ final class IslandView: NSView {
 
     override func layout() {
         super.layout()
-        effect.frame = CGRect(origin: .zero, size: envelope)
         shapeView.frame = CGRect(origin: .zero, size: envelope)
     }
 
@@ -172,7 +155,7 @@ final class IslandView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let from = fill.presentation()?.path ?? fill.path
-        for l in [fill, effectMask, bandMask] {
+        for l in [fill] {
             l.path = path
             if animate, let from, let path {
                 let a = CASpringAnimation(keyPath: "path")
@@ -185,10 +168,6 @@ final class IslandView: NSView {
                 l.add(a, forKey: "path")
             }
         }
-        band.frame = CGRect(x: 0, y: H - notchHeight - 14, width: envelope.width, height: notchHeight + 14)
-        band.startPoint = CGPoint(x: 0.5, y: 1)
-        band.endPoint = CGPoint(x: 0.5, y: 0)
-        band.locations = [0, NSNumber(value: Double(notchHeight / (notchHeight + 14))), 1]
         layoutPill(shown: shown, extra: extra, attention: attention, leftEdge: cl, notchR: notchR, H: H)
         CATransaction.commit()
 
@@ -199,13 +178,10 @@ final class IslandView: NSView {
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = animate ? (opening ? 0.22 : 0.14) : 0
                 ctx.allowsImplicitAnimation = true
-                effect.animator().alphaValue = opening ? 1 : 0
                 hosting.animator().alphaValue = opening ? 1 : 0
             })
             CATransaction.begin()
             CATransaction.setAnimationDuration(animate ? 0.16 : 0)
-            fill.fillColor = Theme.notchBlack.withAlphaComponent(opening ? 0.55 : 1).cgColor
-            band.opacity = opening ? 1 : 0
             pill.opacity = opening ? 0 : 1
             CATransaction.commit()
         }
