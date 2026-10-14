@@ -115,7 +115,7 @@ Subagents (SubagentStart/Stop, agent_id) are children of the session and never c
 2. **Expanded panel and jump.** Rows, subagents, the Claude usage strip, and jump for Terminal, iTerm2, Ghostty, tmux, VS Code/Cursor via the VSIX, and the Claude Desktop app. Checks: 4, 5, 6.
 3. **Approvals and questions (Claude).** Cards, diff, allow-for-session, ⌘1–9 and free text, undo, receipts, the queue, the summon hotkey, sounds, and frontmost deferral. Checks: 2, 3, 7.
 4. **Codex.** Hooks plus trust-hash installer, app-server client, the Desktop LaunchAgent spike, `codex://` jump, Codex usage and subagents. Checks: criteria 1–8 re-run for Codex CLI and Desktop.
-5. **Windows.** WPF spike, then the shell. Named pipe, Windows paths, Windows Terminal jump (spike: map `WT_SESSION` to a tab via UI Automation, then `wt focus-tab`), VS Code/Cursor, tray, CI release. Checks: 1–8 on the user's PC.
+5. **Windows (deferred 2026-10-14: no Windows PC available yet; resume with the WPF spike when it is).** WPF spike, then the shell. Named pipe, Windows paths, Windows Terminal jump (spike: map `WT_SESSION` to a tab via UI Automation, then `wt focus-tab`), VS Code/Cursor, tray, CI release. Checks: 1–8 on the user's PC.
 
 ## Verification (D29, every slice)
 1. Rust unit tests written test-first: every state-machine transition, adapter normalization against real fixtures, installer install→uninstall byte-hash round-trip (criterion 8) including the drift case, the diff builder, and the usage-window expiry.
