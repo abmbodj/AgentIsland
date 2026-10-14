@@ -323,3 +323,28 @@ fn stop_events_from_unknown_internal_agents_are_ignored() {
     assert!(sess.subagents.is_empty());
     assert_eq!(sess.state, State::Working);
 }
+
+#[test]
+fn desktop_session_offer_waits_for_you_until_answered_in_the_app() {
+    let mut s = store_with_session();
+    let offer = json!({"tool_name": "mcp__ccd_session__start_session", "tool_input": {"initiation": "offer", "title": "Fix the jump"}});
+    s.handle(&claude("PreToolUse-Bash", offer.clone()), T0 + 1);
+    let snap = only(&s);
+    assert_eq!(snap.state, State::NeedsInput);
+    let a = &snap.pending[0];
+    assert_eq!((a.title.as_str(), a.detail.as_str(), a.held), ("Start this in its own session?", "Fix the jump", false));
+    s.handle(&claude("PostToolUse-Bash", offer), T0 + 2);
+    assert_eq!(only(&s).state, State::Working);
+    assert_eq!(s.snapshot().attention, 0);
+}
+
+#[test]
+fn proposals_and_subagent_calls_do_not_wait_for_you() {
+    let mut s = store_with_session();
+    let own = json!({"tool_name": "mcp__ccd_session__start_session", "tool_input": {"initiation": "own_initiative", "title": "Later"}});
+    s.handle(&claude("PreToolUse-Bash", own), T0 + 1);
+    let sub = json!({"agent_id": "a1", "tool_name": "mcp__ccd_settings__set_setting", "tool_input": {}});
+    s.handle(&claude("PreToolUse-Bash", sub), T0 + 2);
+    assert_eq!(only(&s).state, State::Working);
+    assert_eq!(s.snapshot().attention, 0);
+}

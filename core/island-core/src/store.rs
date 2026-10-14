@@ -167,6 +167,17 @@ impl Terminal {
     }
 }
 
+/// Claude desktop tools that wait for the user in the app's own UI rather than asking permission.
+fn desktop_prompt(tool: &str, input: &Value) -> Option<&'static str> {
+    match tool {
+        "mcp__ccd_session__start_session" if input["initiation"] == "offer" => Some("Start this in its own session?"),
+        "mcp__ccd_settings__set_setting" => Some("Approve a settings change"),
+        "mcp__ccd_session_mgmt__set_session_permission_mode" => Some("Approve a permission-mode change"),
+        "mcp__computer-use__request_access" => Some("Grant app access"),
+        _ => None,
+    }
+}
+
 /// Nothing tells us when this session goes away (no process or app-server connection to watch),
 /// so it goes stale after a quiet spell. A waiting question never does.
 fn unwatched(s: &Session) -> bool {
@@ -347,6 +358,17 @@ impl Store {
                             sub.activity = label;
                         }
                     }
+                }
+                // Waits for you in the desktop app's own UI: hand off until the tool completes.
+                if let (None, Some(title)) = (agent_id, desktop_prompt(tool, &p["tool_input"])) {
+                    s.pending.push(Attention {
+                        title: title.into(),
+                        detail: p["tool_input"]["title"].as_str().unwrap_or_default().into(),
+                        held: false,
+                        can_allow_session: false,
+                        ..attention(attention_id, tool, &p["tool_input"], now, None)
+                    });
+                    s.set(State::NeedsInput, now);
                 }
             }
             "PermissionRequest" if s.agent == "codex" => {
