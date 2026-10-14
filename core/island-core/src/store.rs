@@ -361,11 +361,14 @@ impl Store {
             }
             "PostToolUse" | "PostToolUseFailure" => {
                 // Answered in the terminal: free the hook that is still waiting on us.
+                // The tool's input may gain fields by now (AskUserQuestion adds "answers"), so match
+                // when everything the request had is unchanged.
+                let post = &p["tool_input"];
                 let same = |a: &Attention| {
                     a.tool == tool
-                        && match (a.input.get("command"), p["tool_input"].get("command")) {
+                        && match (a.input.get("command"), post.get("command")) {
                             (Some(x), Some(y)) => x == y,
-                            _ => a.input == p["tool_input"],
+                            _ => a.input.as_object().map_or(a.input == *post, |m| m.iter().all(|(k, v)| post.get(k) == Some(v))),
                         }
                 };
                 if let Some(i) = s.pending.iter().position(|a| a.channel == Channel::Hook && same(a)) {

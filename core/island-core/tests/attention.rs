@@ -95,6 +95,16 @@ fn answering_in_the_terminal_releases_the_waiting_hook_silently() {
 }
 
 #[test]
+fn answering_a_question_in_the_terminal_withdraws_its_card() {
+    // PostToolUse echoes the questions plus the "answers" the user picked in the terminal.
+    let mut s = Store::default();
+    let id = s.handle(&claude("PermissionRequest-AskUserQuestion", json!({})), T0).unwrap();
+    s.handle(&claude("PostToolUse-AskUserQuestion", json!({})), T0 + 1);
+    assert_eq!(reply(&mut s), vec![(id, Value::Null)]);
+    assert!(pending(&s).is_empty());
+}
+
+#[test]
 fn a_killed_hook_withdraws_its_card() {
     let mut s = Store::default();
     let id = s.handle(&claude("PermissionRequest-Bash", json!({})), T0).unwrap();
