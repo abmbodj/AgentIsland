@@ -241,6 +241,27 @@ fn quiet_working_session_without_pid_goes_stale_then_is_dropped() {
 }
 
 #[test]
+fn quiet_idle_or_finished_session_without_pid_goes_stale_too() {
+    // A session nothing can watch must not sit on the shelf forever.
+    for event in ["SessionStart", "Stop"] {
+        let mut s = Store::default();
+        s.handle(&without_pid(claude(event, json!({}))), T0);
+        s.tick(T0 + 30 * MIN);
+        assert_eq!(only(&s).state, State::Stale, "{event}");
+        s.tick(T0 + 30 * MIN + 2 * 60 * MIN);
+        assert!(s.snapshot().sessions.is_empty(), "{event}");
+    }
+}
+
+#[test]
+fn a_waiting_question_without_pid_never_goes_stale() {
+    let mut s = Store::default();
+    s.handle(&without_pid(claude("PermissionRequest-Bash", json!({}))), T0);
+    s.tick(T0 + 5 * 60 * MIN);
+    assert_eq!(only(&s).state, State::NeedsInput);
+}
+
+#[test]
 fn stale_session_comes_back_on_any_event() {
     let mut s = Store::default();
     s.handle(&without_pid(claude("UserPromptSubmit", json!({}))), T0);
@@ -301,4 +322,69 @@ fn stop_events_from_unknown_internal_agents_are_ignored() {
     let sess = only(&s);
     assert!(sess.subagents.is_empty());
     assert_eq!(sess.state, State::Working);
+}
+
+#[test]
+fn desktop_session_offer_waits_for_you_until_answered_in_the_app() {
+    let mut s = store_with_session();
+    let offer = json!({"tool_name": "mcp__ccd_session__start_session", "tool_input": {"initiation": "offer", "title": "Fix the jump"}});
+    s.handle(&claude("PreToolUse-Bash", offer.clone()), T0 + 1);
+    let snap = only(&s);
+    assert_eq!(snap.state, State::NeedsInput);
+    let a = &snap.pending[0];
+    assert_eq!((a.title.as_str(), a.detail.as_str(), a.held), ("Start this in its own session?", "Fix the jump", false));
+    s.handle(&claude("PostToolUse-Bash", offer), T0 + 2);
+    assert_eq!(only(&s).state, State::Working);
+    assert_eq!(s.snapshot().attention, 0);
+}
+
+#[test]
+fn proposals_and_subagent_calls_do_not_wait_for_you() {
+    let mut s = store_with_session();
+    let own = json!({"tool_name": "mcp__ccd_session__start_session", "tool_input": {"initiation": "own_initiative", "title": "Later"}});
+    s.handle(&claude("PreToolUse-Bash", own), T0 + 1);
+    let sub = json!({"agent_id": "a1", "tool_name": "mcp__ccd_settings__set_setting", "tool_input": {}});
+    s.handle(&claude("PreToolUse-Bash", sub), T0 + 2);
+    assert_eq!(only(&s).state, State::Working);
+    assert_eq!(s.snapshot().attention, 0);
+}
+
+#[test]
+fn desktop_sessions_take_the_apps_title_then_their_repo_name() {
+    let dir = std::env::temp_dir().join(format!("island-ccd-{}", std::process::id()));
+    let org = dir.join("acct").join("org");
+    std::fs::create_dir_all(&org).unwrap();
+    let file = org.join("local_abc-1.json");
+    std::fs::write(&file, r#"{"title":"","originCwd":"/Users/me/AgentShelf2"}"#).unwrap();
+    let mut s = Store::default();
+    s.desktop_sessions = Some(dir.clone());
+    let mut m = claude("SessionStart", json!({}));
+    m.env.insert("CLAUDE_CODE_HOST_SESSION_ID".into(), "local_abc-1".into());
+    s.handle(&m, T0);
+    assert_eq!(only(&s).project, "AgentShelf2");
+    // The app names the session after the first turn.
+    std::fs::write(&file, r#"{"title":"Open PR button design","originCwd":"/Users/me/AgentShelf2"}"#).unwrap();
+    let mut stop = claude("Stop", json!({}));
+    stop.env = m.env.clone();
+    s.handle(&stop, T0 + 1);
+    assert_eq!(only(&s).project, "Open PR button design");
+    // An id that isn't the app's shape is never used as a path.
+    m.env.insert("CLAUDE_CODE_HOST_SESSION_ID".into(), "../acct/org/local_abc-1".into());
+    let mut other = Store::default();
+    other.desktop_sessions = Some(dir.clone());
+    other.handle(&m, T0);
+    assert_ne!(only(&other).project, "Open PR button design");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_desktop_prompt_that_also_asked_permission_clears_both_cards() {
+    let mut s = store_with_session();
+    let call = json!({"tool_name": "mcp__ccd_settings__set_setting", "tool_input": {"key": "autoArchive", "value": true}});
+    s.handle(&claude("PreToolUse-Bash", call.clone()), T0 + 1);
+    s.handle(&claude("PermissionRequest-Bash", call.clone()), T0 + 2);
+    assert_eq!(s.snapshot().attention, 2);
+    s.handle(&claude("PostToolUse-Bash", call), T0 + 3);
+    assert_eq!(s.snapshot().attention, 0);
+    assert_eq!(only(&s).state, State::Working);
 }

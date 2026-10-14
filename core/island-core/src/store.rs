@@ -4,6 +4,7 @@ use crate::protocol::HookMessage;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 pub type Millis = u64;
 
@@ -167,6 +168,42 @@ impl Terminal {
     }
 }
 
+/// The desktop app's title for a session, else its repo's name (a worktree's cwd is a scratch folder).
+fn desktop_name(dir: &Path, local_id: &str) -> Option<String> {
+    // The id comes from a hook's environment and becomes a file name: only the app's own shape.
+    let id = local_id.strip_prefix("local_")?;
+    if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return None;
+    }
+    for account in std::fs::read_dir(dir).ok()?.flatten() {
+        for org in std::fs::read_dir(account.path()).into_iter().flatten().flatten() {
+            let Ok(text) = std::fs::read_to_string(org.path().join(format!("{local_id}.json"))) else { continue };
+            let v: Value = serde_json::from_str(&text).ok()?;
+            let title = v["title"].as_str().filter(|t| !t.trim().is_empty());
+            let repo = v["originCwd"].as_str().and_then(|c| c.rsplit('/').find(|s| !s.is_empty()));
+            return title.or(repo).map(str::to_string);
+        }
+    }
+    None
+}
+
+/// Claude desktop tools that wait for the user in the app's own UI rather than asking permission.
+fn desktop_prompt(tool: &str, input: &Value) -> Option<&'static str> {
+    match tool {
+        "mcp__ccd_session__start_session" if input["initiation"] == "offer" => Some("Start this in its own session?"),
+        "mcp__ccd_settings__set_setting" => Some("Approve a settings change"),
+        "mcp__ccd_session_mgmt__set_session_permission_mode" => Some("Approve a permission-mode change"),
+        "mcp__computer-use__request_access" => Some("Grant app access"),
+        _ => None,
+    }
+}
+
+/// Nothing tells us when this session goes away (no process or app-server connection to watch),
+/// so it goes stale after a quiet spell. A waiting question never does.
+fn unwatched(s: &Session) -> bool {
+    matches!(s.state, State::Working | State::Idle | State::Finished) && s.pid.is_none() && s.conn.is_none()
+}
+
 /// The Claude desktop app's end-of-turn "next step" box.
 const NEXT_STEP_TOOL: &str = "mcp__ccd_turn__wrap_up";
 
@@ -216,6 +253,8 @@ pub struct Store {
     replies: Vec<(u64, String)>,
     /// JSON-RPC responses owed to app-server connections: (connection, message).
     appserver_replies: Vec<(u64, Value)>,
+    /// The Claude desktop app's session metadata (`<account>/<org>/local_<id>.json`); None = don't look.
+    pub desktop_sessions: Option<PathBuf>,
 }
 
 /// Withdraw every pending item, releasing waiting hooks with an empty (no-decision) reply.
@@ -289,18 +328,27 @@ impl Store {
         self.next_id += 1;
         let attention_id = self.next_id;
         let replies = &mut self.replies;
+        let desktop_sessions = self.desktop_sessions.as_deref();
         let s = &mut self.sessions[idx];
         let tool = p["tool_name"].as_str().unwrap_or_default();
         let agent_id = p["agent_id"].as_str();
         s.last_event = now;
+        let event = p["hook_event_name"].as_str().unwrap_or_default();
         if !s.identity_locked {
+            let host = s.terminal.host_session.take();
             s.terminal = Terminal::from(msg);
             if let Some(pid) = msg.env.get("CLAUDE_PID").and_then(|v| v.parse().ok()) {
                 s.pid = Some(pid);
             }
+            // The app titles a session after its first turn, so look again when a turn ends.
+            if s.terminal.host_session != host || matches!(event, "SessionStart" | "Stop") {
+                if let Some(name) = desktop_sessions.zip(s.terminal.host_session.as_deref()).and_then(|(d, id)| desktop_name(d, id)) {
+                    s.project = name;
+                }
+            }
         }
 
-        match p["hook_event_name"].as_str().unwrap_or_default() {
+        match event {
             "SessionStart" => {
                 if matches!(s.state, State::Ended | State::Error | State::Stale) {
                     s.set(State::Idle, now);
@@ -341,6 +389,17 @@ impl Store {
                             sub.activity = label;
                         }
                     }
+                }
+                // Waits for you in the desktop app's own UI: hand off until the tool completes.
+                if let (None, Some(title)) = (agent_id, desktop_prompt(tool, &p["tool_input"])) {
+                    s.pending.push(Attention {
+                        title: title.into(),
+                        detail: p["tool_input"]["title"].as_str().unwrap_or_default().into(),
+                        held: false,
+                        can_allow_session: false,
+                        ..attention(attention_id, tool, &p["tool_input"], now, None)
+                    });
+                    s.set(State::NeedsInput, now);
                 }
             }
             "PermissionRequest" if s.agent == "codex" => {
@@ -410,9 +469,16 @@ impl Store {
                     a.tool == tool && (tool == "ExitPlanMode" || a.input.as_object().filter(|m| !m.is_empty())
                         .is_some_and(|m| m.iter().all(|(k, v)| post.get(k).is_none_or(|p| p == v))))
                 };
-                let found = s.pending.iter().position(|a| a.channel == Channel::Hook && same(a))
-                    .or_else(|| s.pending.iter().position(|a| a.channel == Channel::Hook && fits(a)));
-                if let Some(i) = found {
+                // One call can have both a permission card and a desktop-prompt handoff: clear one of each.
+                let hook = |a: &Attention| a.channel == Channel::Hook;
+                let mut gone: Vec<usize> = [true, false].iter()
+                    .filter_map(|&held| s.pending.iter().position(|a| hook(a) && a.held == held && same(a)))
+                    .collect();
+                if gone.is_empty() {
+                    gone.extend(s.pending.iter().position(|a| hook(a) && fits(a)));
+                }
+                gone.sort_unstable();
+                for i in gone.into_iter().rev() {
                     let a = s.pending.remove(i);
                     if a.held {
                         replies.push((a.id, String::new()));
@@ -687,7 +753,7 @@ impl Store {
     /// Apply time-based transitions. Call at (or after) `next_deadline()`.
     pub fn tick(&mut self, now: Millis) {
         for s in &mut self.sessions {
-            if s.state == State::Working && s.pid.is_none() && now >= s.last_event + STALE_AFTER {
+            if unwatched(s) && now >= s.last_event + STALE_AFTER {
                 s.state = State::Stale;
                 s.since = s.last_event + STALE_AFTER;
             }
@@ -715,7 +781,7 @@ impl Store {
             match s.state {
                 State::Ended | State::Error => d.push(s.since + ENDED_GRACE),
                 State::Stale => d.push(s.since + STALE_DROP),
-                State::Working if s.pid.is_none() => d.push(s.last_event + STALE_AFTER),
+                _ if unwatched(s) => d.push(s.last_event + STALE_AFTER),
                 _ => {}
             }
             d.extend(s.subagents.iter().filter(|a| a.done).map(|a| a.since + SUBAGENT_FADE));

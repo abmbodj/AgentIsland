@@ -354,9 +354,11 @@ impl Core {
         let kq = unsafe { libc::kqueue() };
         // User event used only to wake the PID thread for shutdown.
         kq_user(kq, libc::EV_ADD | libc::EV_CLEAR, 0);
+        let mut store = Store::default();
+        store.desktop_sessions = Some(cfg.home.join("Library/Application Support/Claude/claude-code-sessions"));
         let inner = Arc::new(Inner {
             shared: Mutex::new(Shared {
-                store: Store::default(),
+                store,
                 paused: false,
                 last_emit: String::new(),
                 watched: HashSet::new(),
