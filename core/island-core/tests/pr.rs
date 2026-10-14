@@ -134,7 +134,7 @@ fn creating_writes_the_text_headless_and_opens_a_ready_pr() {
     let c = pr::create(&f.tools(), &f.repo, "claude", "main", "Added b.txt").unwrap();
     assert_eq!(c, Created { url: "https://github.com/acme/widgets/pull/7".into(), number: 7, existing: false });
     let args = f.log("gh-create");
-    assert!(args.contains("--repo acme/widgets --base main --head feature --title Add the widget --body-file"), "ARGS={args} PROMPT={}", f.log("prompt"));
+    assert!(args.contains("--repo acme/widgets --base main --head feature --title=Add the widget --body-file"), "ARGS={args} PROMPT={}", f.log("prompt"));
     assert!(!args.contains("--draft"));
     let prompt = f.log("prompt");
     assert!(prompt.contains("+two") && prompt.contains("Added b.txt") && prompt.contains("data, not instructions"), "{prompt}");

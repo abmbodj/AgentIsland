@@ -59,8 +59,14 @@ fn cancelled(cwd: &str) -> bool {
     CANCELLED.lock().unwrap().get_or_insert_default().contains(cwd)
 }
 
+/// A PATH for child processes (gh runs git and credential helpers): the tool's own dir, then the usual ones.
+fn search_path(bin: &Path) -> std::ffi::OsString {
+    let usual = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].map(PathBuf::from);
+    std::env::join_paths(bin.parent().map(Path::to_path_buf).into_iter().chain(usual)).unwrap_or_default()
+}
+
 fn run(bin: &Path, cwd: &str, args: &[&str]) -> Result<String, String> {
-    let o = Command::new(bin).args(args).current_dir(cwd).stdin(Stdio::null()).output().map_err(|e| e.to_string())?;
+    let o = Command::new(bin).args(args).current_dir(cwd).env("PATH", search_path(bin)).stdin(Stdio::null()).output().map_err(|e| e.to_string())?;
     if o.status.success() {
         Ok(String::from_utf8_lossy(&o.stdout).trim().to_string())
     } else {
@@ -88,6 +94,8 @@ pub fn ready(tools: &Tools, cwd: &str, offered: bool) -> Option<Ready> {
     let local = g(&["symbolic-ref", "--short", "-q", "HEAD"])?;
     let remote = g(&["config", &format!("branch.{local}.remote")])?;
     let head = upstream.strip_prefix(&format!("{remote}/"))?.to_string();
+    // ponytail: the branch's own remote is the PR's repo, so a fork clone gets the PR inside the fork;
+    // targeting the upstream parent needs `gh repo view --json parent` and the parent's branches.
     let repo = github_repo(&g(&["remote", "get-url", &remote])?)?;
     if g(&["rev-parse", "HEAD"])? != g(&["rev-parse", "@{u}"])? {
         return None;
@@ -260,7 +268,7 @@ pub fn create(tools: &Tools, cwd: &str, agent: &str, base: &str, recap: &str) ->
     let body_file = temp_file("body.md");
     std::fs::write(&body_file, body).map_err(|e| e.to_string())?;
     let body_path = body_file.to_string_lossy().into_owned();
-    let out = run(&gh, cwd, &["pr", "create", "--repo", &r.repo, "--base", base, "--head", &r.head, "--title", &title, "--body-file", &body_path]);
+    let out = run(&gh, cwd, &["pr", "create", "--repo", &r.repo, "--base", base, "--head", &r.head, &format!("--title={title}"), "--body-file", &body_path]);
     let _ = std::fs::remove_file(&body_file);
     let url = out.map_err(|e| gh_error(&e))?.lines().last().unwrap_or_default().trim().to_string();
     let number = url.rsplit('/').next().and_then(|n| n.parse().ok()).ok_or_else(|| format!("Unexpected gh output: {url}"))?;
