@@ -24,6 +24,8 @@ struct SessionInfo: Decodable, Equatable, Identifiable {
     var terminal: Terminal
     /// Answers go through the agent's app-server (Codex daemon).
     var inline: Bool
+    /// The desktop app offered to create a PR: its recap.
+    var prOffer: String?
 }
 
 enum SessionState: String, Decodable {

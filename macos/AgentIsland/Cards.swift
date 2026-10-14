@@ -80,7 +80,7 @@ private struct ResponseButton: View {
     }
 }
 
-private struct UndoRing: View {
+struct UndoRing: View {
     let started: Date
     var body: some View {
         TimelineView(.animation(minimumInterval: Theme.reduceMotion ? 0.5 : 1 / 30)) { ctx in
@@ -268,6 +268,7 @@ private struct CardView: View {
             }
             Text("Answer it in \(Fmt.agentName(session.agent)).").font(.system(size: 12)).foregroundStyle(secondary)
             HStack {
+                PRButton(model: model, session: session)
                 Spacer()
                 Button { model.onJump(session) } label: {
                     Text(session.agent == "codex" && session.terminal.bundleId == "com.openai.codex" ? "Open in Codex" : "Open session").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.black.opacity(0.85))
