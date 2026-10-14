@@ -118,6 +118,9 @@ pub struct Session {
     /// Codex file changes seen in `item/started`, by item id, for approval diffs.
     #[serde(skip)]
     pub file_changes: BTreeMap<String, (String, DiffPreview)>,
+    /// The Claude desktop app's next-step question, shown once the turn ends.
+    #[serde(skip)]
+    pub next_step: Option<Attention>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -160,6 +163,9 @@ impl Terminal {
         }
     }
 }
+
+/// The Claude desktop app's end-of-turn "next step" box.
+const NEXT_STEP_TOOL: &str = "mcp__ccd_turn__wrap_up";
 
 pub const ENDED_GRACE: Millis = 10_000;
 pub const STALE_AFTER: Millis = 30 * 60_000;
@@ -272,6 +278,7 @@ impl Store {
                     conn: None,
                     identity_locked: false,
                     file_changes: BTreeMap::new(),
+                    next_step: None,
                 });
                 self.sessions.len() - 1
             }
@@ -314,6 +321,7 @@ impl Store {
             }
             "UserPromptSubmit" => {
                 clear_pending(s, replies);
+                s.next_step = None;
                 s.state = State::Working;
                 s.since = now;
                 s.activity = "Thinking".into();
@@ -359,13 +367,37 @@ impl Store {
                 s.set(State::NeedsInput, now);
                 return Some(attention_id);
             }
+            "PostToolUse" if tool == NEXT_STEP_TOOL && agent_id.is_none() => {
+                // The desktop app's next-step box: answered in the app, so the card only hands off.
+                let ask = p["tool_input"]["ask"].as_str().unwrap_or_default();
+                s.next_step = (!ask.is_empty()).then(|| Attention {
+                    kind: "question".into(),
+                    detail: String::new(),
+                    questions: vec![Question {
+                        id: String::new(),
+                        question: ask.into(),
+                        header: String::new(),
+                        options: vec![],
+                        multi_select: false,
+                        allows_other: false,
+                        secret: false,
+                    }],
+                    can_allow_session: false,
+                    held: false,
+                    note: p["tool_input"]["recap"].as_str().map(str::to_string),
+                    ..attention(attention_id, tool, &Value::Null, now, None)
+                });
+            }
             "PostToolUse" | "PostToolUseFailure" => {
                 // Answered in the terminal: free the hook that is still waiting on us.
+                // The tool's input may gain fields by now (AskUserQuestion adds "answers"), so match
+                // when everything the request had is unchanged.
+                let post = &p["tool_input"];
                 let same = |a: &Attention| {
                     a.tool == tool
-                        && match (a.input.get("command"), p["tool_input"].get("command")) {
+                        && match (a.input.get("command"), post.get("command")) {
                             (Some(x), Some(y)) => x == y,
-                            _ => a.input == p["tool_input"],
+                            _ => a.input.as_object().filter(|m| !m.is_empty()).map_or(a.input == *post, |m| m.iter().all(|(k, v)| post.get(k) == Some(v))),
                         }
                 };
                 if let Some(i) = s.pending.iter().position(|a| a.channel == Channel::Hook && same(a)) {
@@ -384,8 +416,13 @@ impl Store {
                     .as_array()
                     .map_or(0, |t| t.iter().filter(|t| t["status"] == "running").count());
                 if running > 0 {
-                    s.set(State::Working, now);
                     s.activity = format!("Waiting for {running} agent{}", if running == 1 { "" } else { "s" });
+                }
+                if let Some(a) = s.next_step.take() {
+                    s.pending.push(a);
+                    s.set(State::NeedsInput, now);
+                } else if running > 0 {
+                    s.set(State::Working, now);
                 } else {
                     s.set(State::Finished, now);
                 }
@@ -614,6 +651,11 @@ impl Store {
     /// The user looked at the session (jumped to it, or its row was visible in the panel).
     pub fn viewed(&mut self, agent: &str, id: &str, now: Millis) {
         if let Some(s) = self.find(agent, id) {
+            // The next-step box lives in the app; once the user went there, it's theirs.
+            s.pending.retain(|a| a.tool != NEXT_STEP_TOOL);
+            if s.pending.is_empty() && s.state == State::NeedsInput {
+                s.set(State::Idle, now);
+            }
             if s.state == State::Finished {
                 s.set(State::Idle, now);
             }

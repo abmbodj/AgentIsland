@@ -95,6 +95,16 @@ fn answering_in_the_terminal_releases_the_waiting_hook_silently() {
 }
 
 #[test]
+fn answering_a_question_in_the_terminal_withdraws_its_card() {
+    // PostToolUse echoes the questions plus the "answers" the user picked in the terminal.
+    let mut s = Store::default();
+    let id = s.handle(&claude("PermissionRequest-AskUserQuestion", json!({})), T0).unwrap();
+    s.handle(&claude("PostToolUse-AskUserQuestion", json!({})), T0 + 1);
+    assert_eq!(reply(&mut s), vec![(id, Value::Null)]);
+    assert!(pending(&s).is_empty());
+}
+
+#[test]
 fn a_killed_hook_withdraws_its_card() {
     let mut s = Store::default();
     let id = s.handle(&claude("PermissionRequest-Bash", json!({})), T0).unwrap();
@@ -165,4 +175,76 @@ fn subagent_requests_say_which_subagent_asks() {
     s.handle(&claude("SubagentStart", json!({})), T0);
     s.handle(&claude("PermissionRequest-Bash", json!({"agent_id":"ab77a0d0ea52d01b9","agent_type":"Explore"})), T0 + 1);
     assert_eq!(pending(&s)[0].subagent.as_deref(), Some("Explore"));
+}
+
+fn wrap_up(input: Value) -> island_core::protocol::HookMessage {
+    claude("PostToolUse-Bash", json!({"tool_name": "mcp__ccd_turn__wrap_up", "tool_input": input, "tool_response": []}))
+}
+
+#[test]
+fn a_desktop_next_step_question_waits_on_the_island_until_the_user_replies() {
+    let mut s = Store::default();
+    s.handle(&claude("UserPromptSubmit", json!({})), T0);
+    s.handle(&wrap_up(json!({"recap": "Fixed the bug. Nothing committed.", "ask": "Commit this fix?",
+        "actions": [{"action": "commit"}, {"label": "Not yet"}]})), T0 + 1);
+    assert!(pending(&s).is_empty(), "the box shows only once the turn ends");
+    s.handle(&claude("Stop", json!({})), T0 + 2);
+
+    let a = &pending(&s)[0];
+    assert!(!a.held, "nothing to reply to: it is answered in the app");
+    assert_eq!(a.kind, "question");
+    assert_eq!(a.questions[0].question, "Commit this fix?");
+    assert_eq!(a.note.as_deref(), Some("Fixed the bug. Nothing committed."));
+    assert_eq!(state(&s), State::NeedsInput);
+    assert!(reply(&mut s).is_empty());
+
+    s.handle(&claude("UserPromptSubmit", json!({})), T0 + 3);
+    assert!(pending(&s).is_empty());
+    assert_eq!(state(&s), State::Working);
+}
+
+#[test]
+fn a_recap_without_a_question_just_finishes() {
+    let mut s = Store::default();
+    s.handle(&claude("UserPromptSubmit", json!({})), T0);
+    s.handle(&wrap_up(json!({"recap": "Done."})), T0 + 1);
+    s.handle(&claude("Stop", json!({})), T0 + 2);
+    assert!(pending(&s).is_empty());
+    assert_eq!(state(&s), State::Finished);
+}
+
+#[test]
+fn opening_the_session_hands_the_next_step_over_to_the_app() {
+    let mut s = Store::default();
+    s.handle(&claude("UserPromptSubmit", json!({})), T0);
+    s.handle(&wrap_up(json!({"recap": "r", "ask": "Commit?"})), T0 + 1);
+    s.handle(&claude("Stop", json!({})), T0 + 2);
+    let sess = s.snapshot().sessions[0].clone();
+    s.viewed(&sess.agent, &sess.id, T0 + 3);
+    assert!(pending(&s).is_empty(), "a box dismissed in the app must not stick on the island");
+    assert_eq!(state(&s), State::Idle);
+}
+
+#[test]
+fn a_next_step_keeps_the_background_agents_activity() {
+    let mut s = Store::default();
+    s.handle(&claude("UserPromptSubmit", json!({})), T0);
+    s.handle(&wrap_up(json!({"recap": "r", "ask": "Commit?"})), T0 + 1);
+    s.handle(&claude("Stop-bgtasks", json!({})), T0 + 2);
+    assert_eq!(pending(&s).len(), 1);
+    assert!(s.snapshot().sessions[0].activity.starts_with("Waiting for"));
+}
+
+#[test]
+fn a_subagent_wrap_up_does_not_replace_the_next_step() {
+    let mut s = Store::default();
+    s.handle(&claude("UserPromptSubmit", json!({})), T0);
+    s.handle(&wrap_up(json!({"recap": "r", "ask": "Commit?"})), T0 + 1);
+    let mut sub = wrap_up(json!({"recap": "sub"}));
+    let mut p: Value = serde_json::from_str(&sub.payload).unwrap();
+    p["agent_id"] = json!("a1");
+    sub.payload = p.to_string();
+    s.handle(&sub, T0 + 2);
+    s.handle(&claude("Stop", json!({})), T0 + 3);
+    assert_eq!(pending(&s)[0].questions[0].question, "Commit?");
 }
