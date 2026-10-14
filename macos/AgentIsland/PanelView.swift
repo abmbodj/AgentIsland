@@ -321,6 +321,17 @@ private struct SessionRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Shows this session's terminal")
+        // The row is one combined element, so its PR control is offered as actions.
+        .accessibilityActions {
+            switch model.pr[session.id] {
+            case .ready: Button("Open pull request") { model.startPR(session) }
+            case .staged: Button("Undo pull request") { model.undoPR(session.id) }
+            case .writing(false): Button("Cancel pull request") { model.cancelPR(session) }
+            case .done(let c): Button("Open PR #\(c.number)") { if let url = URL(string: c.url) { NSWorkspace.shared.open(url) } }
+            case .failed: Button("Retry pull request") { model.retryPR(session) }
+            default: EmptyView()
+            }
+        }
     }
 }
 
