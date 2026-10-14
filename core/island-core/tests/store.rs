@@ -376,3 +376,15 @@ fn desktop_sessions_take_the_apps_title_then_their_repo_name() {
     assert_ne!(only(&other).project, "Open PR button design");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_desktop_prompt_that_also_asked_permission_clears_both_cards() {
+    let mut s = store_with_session();
+    let call = json!({"tool_name": "mcp__ccd_settings__set_setting", "tool_input": {"key": "autoArchive", "value": true}});
+    s.handle(&claude("PreToolUse-Bash", call.clone()), T0 + 1);
+    s.handle(&claude("PermissionRequest-Bash", call.clone()), T0 + 2);
+    assert_eq!(s.snapshot().attention, 2);
+    s.handle(&claude("PostToolUse-Bash", call), T0 + 3);
+    assert_eq!(s.snapshot().attention, 0);
+    assert_eq!(only(&s).state, State::Working);
+}

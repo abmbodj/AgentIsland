@@ -469,9 +469,16 @@ impl Store {
                     a.tool == tool && (tool == "ExitPlanMode" || a.input.as_object().filter(|m| !m.is_empty())
                         .is_some_and(|m| m.iter().all(|(k, v)| post.get(k).is_none_or(|p| p == v))))
                 };
-                let found = s.pending.iter().position(|a| a.channel == Channel::Hook && same(a))
-                    .or_else(|| s.pending.iter().position(|a| a.channel == Channel::Hook && fits(a)));
-                if let Some(i) = found {
+                // One call can have both a permission card and a desktop-prompt handoff: clear one of each.
+                let hook = |a: &Attention| a.channel == Channel::Hook;
+                let mut gone: Vec<usize> = [true, false].iter()
+                    .filter_map(|&held| s.pending.iter().position(|a| hook(a) && a.held == held && same(a)))
+                    .collect();
+                if gone.is_empty() {
+                    gone.extend(s.pending.iter().position(|a| hook(a) && fits(a)));
+                }
+                gone.sort_unstable();
+                for i in gone.into_iter().rev() {
                     let a = s.pending.remove(i);
                     if a.held {
                         replies.push((a.id, String::new()));
