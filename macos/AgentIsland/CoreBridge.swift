@@ -87,6 +87,7 @@ struct Terminal: Decodable, Equatable {
     var tmuxPane: String?
     var itermSession: String?
     var termSession: String?
+    var hostSession: String?
     var pids: [Int32]
 }
 
