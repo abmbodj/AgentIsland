@@ -282,7 +282,7 @@ final class IslandController {
             default: break
             }
         }
-        if let n = Int(chars), (1...9).contains(n), item.kind == "question", cmd || !typing {
+        if let n = Int(chars), (1...9).contains(n), item.held, item.kind == "question", cmd || !typing {
             model.pick(item, option: n - 1)
             return true
         }

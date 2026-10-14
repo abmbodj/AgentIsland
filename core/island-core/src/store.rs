@@ -164,6 +164,9 @@ impl Terminal {
     }
 }
 
+/// The Claude desktop app's end-of-turn "next step" box.
+const NEXT_STEP_TOOL: &str = "mcp__ccd_turn__wrap_up";
+
 pub const ENDED_GRACE: Millis = 10_000;
 pub const STALE_AFTER: Millis = 30 * 60_000;
 pub const STALE_DROP: Millis = 2 * 60 * 60_000;
@@ -364,12 +367,11 @@ impl Store {
                 s.set(State::NeedsInput, now);
                 return Some(attention_id);
             }
-            "PostToolUse" if tool == "mcp__ccd_turn__wrap_up" => {
+            "PostToolUse" if tool == NEXT_STEP_TOOL && agent_id.is_none() => {
                 // The desktop app's next-step box: answered in the app, so the card only hands off.
                 let ask = p["tool_input"]["ask"].as_str().unwrap_or_default();
                 s.next_step = (!ask.is_empty()).then(|| Attention {
                     kind: "question".into(),
-                    title: "Next step".into(),
                     detail: String::new(),
                     questions: vec![Question {
                         id: String::new(),
@@ -395,7 +397,7 @@ impl Store {
                     a.tool == tool
                         && match (a.input.get("command"), post.get("command")) {
                             (Some(x), Some(y)) => x == y,
-                            _ => a.input.as_object().map_or(a.input == *post, |m| m.iter().all(|(k, v)| post.get(k) == Some(v))),
+                            _ => a.input.as_object().filter(|m| !m.is_empty()).map_or(a.input == *post, |m| m.iter().all(|(k, v)| post.get(k) == Some(v))),
                         }
                 };
                 if let Some(i) = s.pending.iter().position(|a| a.channel == Channel::Hook && same(a)) {
@@ -410,17 +412,17 @@ impl Store {
             }
             "Stop" => {
                 clear_pending(s, replies);
-                if let Some(a) = s.next_step.take() {
-                    s.pending.push(a);
-                    s.set(State::NeedsInput, now);
-                    return None;
-                }
                 let running = p["background_tasks"]
                     .as_array()
                     .map_or(0, |t| t.iter().filter(|t| t["status"] == "running").count());
                 if running > 0 {
-                    s.set(State::Working, now);
                     s.activity = format!("Waiting for {running} agent{}", if running == 1 { "" } else { "s" });
+                }
+                if let Some(a) = s.next_step.take() {
+                    s.pending.push(a);
+                    s.set(State::NeedsInput, now);
+                } else if running > 0 {
+                    s.set(State::Working, now);
                 } else {
                     s.set(State::Finished, now);
                 }
@@ -649,6 +651,11 @@ impl Store {
     /// The user looked at the session (jumped to it, or its row was visible in the panel).
     pub fn viewed(&mut self, agent: &str, id: &str, now: Millis) {
         if let Some(s) = self.find(agent, id) {
+            // The next-step box lives in the app; once the user went there, it's theirs.
+            s.pending.retain(|a| a.tool != NEXT_STEP_TOOL);
+            if s.pending.is_empty() && s.state == State::NeedsInput {
+                s.set(State::Idle, now);
+            }
             if s.state == State::Finished {
                 s.set(State::Idle, now);
             }

@@ -212,3 +212,39 @@ fn a_recap_without_a_question_just_finishes() {
     assert!(pending(&s).is_empty());
     assert_eq!(state(&s), State::Finished);
 }
+
+#[test]
+fn opening_the_session_hands_the_next_step_over_to_the_app() {
+    let mut s = Store::default();
+    s.handle(&claude("UserPromptSubmit", json!({})), T0);
+    s.handle(&wrap_up(json!({"recap": "r", "ask": "Commit?"})), T0 + 1);
+    s.handle(&claude("Stop", json!({})), T0 + 2);
+    let sess = s.snapshot().sessions[0].clone();
+    s.viewed(&sess.agent, &sess.id, T0 + 3);
+    assert!(pending(&s).is_empty(), "a box dismissed in the app must not stick on the island");
+    assert_eq!(state(&s), State::Idle);
+}
+
+#[test]
+fn a_next_step_keeps_the_background_agents_activity() {
+    let mut s = Store::default();
+    s.handle(&claude("UserPromptSubmit", json!({})), T0);
+    s.handle(&wrap_up(json!({"recap": "r", "ask": "Commit?"})), T0 + 1);
+    s.handle(&claude("Stop-bgtasks", json!({})), T0 + 2);
+    assert_eq!(pending(&s).len(), 1);
+    assert!(s.snapshot().sessions[0].activity.starts_with("Waiting for"));
+}
+
+#[test]
+fn a_subagent_wrap_up_does_not_replace_the_next_step() {
+    let mut s = Store::default();
+    s.handle(&claude("UserPromptSubmit", json!({})), T0);
+    s.handle(&wrap_up(json!({"recap": "r", "ask": "Commit?"})), T0 + 1);
+    let mut sub = wrap_up(json!({"recap": "sub"}));
+    let mut p: Value = serde_json::from_str(&sub.payload).unwrap();
+    p["agent_id"] = json!("a1");
+    sub.payload = p.to_string();
+    s.handle(&sub, T0 + 2);
+    s.handle(&claude("Stop", json!({})), T0 + 3);
+    assert_eq!(pending(&s)[0].questions[0].question, "Commit?");
+}
