@@ -246,7 +246,7 @@ struct SettingsView: View {
     @State private var connected = Preferences.claudeConnected
     @State private var codexConnected = Preferences.codexConnected
     @AppStorage("autoExpand") private var autoExpand = true
-    @AppStorage("hoverDelay") private var hoverDelay = 0.35
+    @AppStorage("hoverDelay") private var hoverDelay = 0.1
     @AppStorage("display") private var display = "active"
     @AppStorage("chimeNeedsInput") private var chimeNeedsInput = true
     @AppStorage("chimeFinished") private var chimeFinished = true

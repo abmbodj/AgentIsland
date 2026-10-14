@@ -88,7 +88,7 @@ final class IslandController {
     private var bound: Set<String> = []
     private var heightSink: AnyCancellable?
 
-    var hoverDelay: TimeInterval { UserDefaults.standard.object(forKey: "hoverDelay") as? Double ?? 0.35 }
+    var hoverDelay: TimeInterval { UserDefaults.standard.object(forKey: "hoverDelay") as? Double ?? 0.1 }
     var autoExpand: Bool { UserDefaults.standard.object(forKey: "autoExpand") as? Bool ?? true }
 
     init(screen: NSScreen? = nil) {
