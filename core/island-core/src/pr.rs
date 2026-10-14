@@ -2,7 +2,7 @@
 //! Never pushes. A headless run of the session's own agent, with no tools, writes the title and body.
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -52,8 +52,12 @@ pub struct Created {
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 const DIFF_LIMIT: usize = 60_000;
 
-/// Writer processes by session cwd, so a click on Cancel can stop one.
-static WRITING: Mutex<Option<HashMap<String, u32>>> = Mutex::new(None);
+/// Session cwds whose PR the user cancelled; checked before and while the text is written.
+static CANCELLED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+fn cancelled(cwd: &str) -> bool {
+    CANCELLED.lock().unwrap().get_or_insert_default().contains(cwd)
+}
 
 fn run(bin: &Path, cwd: &str, args: &[&str]) -> Result<String, String> {
     let o = Command::new(bin).args(args).current_dir(cwd).stdin(Stdio::null()).output().map_err(|e| e.to_string())?;
@@ -163,7 +167,8 @@ fn write(tools: &Tools, cwd: &str, agent: &str, prompt: &str) -> Result<(String,
             .map(String::from).into()),
     };
     let bin = tools.find(bin).ok_or_else(|| format!("{bin} isn't installed"))?;
-    let path = std::env::join_paths(&tools.dirs).unwrap_or_default();
+    let system = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"].map(PathBuf::from);
+    let path = std::env::join_paths(tools.dirs.iter().chain(&system)).unwrap_or_default();
     let mut child = Command::new(bin)
         .args(&args)
         .current_dir(cwd)
@@ -175,7 +180,6 @@ fn write(tools: &Tools, cwd: &str, agent: &str, prompt: &str) -> Result<(String,
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("Couldn't start the writer: {e}"))?;
-    WRITING.lock().unwrap().get_or_insert_default().insert(cwd.to_string(), child.id());
     if let Some(mut stdin) = child.stdin.take() {
         let p = prompt.to_string();
         std::thread::spawn(move || {
@@ -195,23 +199,26 @@ fn write(tools: &Tools, cwd: &str, agent: &str, prompt: &str) -> Result<(String,
         if let Ok(Some(st)) = child.try_wait() {
             break Some(st);
         }
-        if started.elapsed() >= WRITE_TIMEOUT {
+        if started.elapsed() >= WRITE_TIMEOUT || cancelled(cwd) {
             let _ = child.kill();
             let _ = child.wait();
             break None;
         }
         std::thread::sleep(Duration::from_millis(100));
     };
-    let cancelled = WRITING.lock().unwrap().get_or_insert_default().remove(cwd).is_none();
-    let text = reader.join().unwrap_or_default();
-    let text = if agent == "codex" { std::fs::read_to_string(&out_file).unwrap_or_default() } else { text };
-    let _ = std::fs::remove_file(&out_file);
-    match status {
-        _ if cancelled => Err("Cancelled".into()),
+    // Only read the output of a clean exit: a killed CLI's own children may hold the pipe open.
+    let result = match status {
+        _ if cancelled(cwd) => Err("Cancelled".into()),
         None => Err("Couldn't write PR text: timed out".into()),
         Some(st) if !st.success() => Err("Couldn't write PR text".into()),
-        Some(_) => parse_written(&text).ok_or_else(|| "Couldn't write PR text".into()),
-    }
+        Some(_) => {
+            let text = reader.join().unwrap_or_default();
+            let text = if agent == "codex" { std::fs::read_to_string(&out_file).unwrap_or_default() } else { text };
+            parse_written(&text).ok_or_else(|| "Couldn't write PR text".into())
+        }
+    };
+    let _ = std::fs::remove_file(&out_file);
+    result
 }
 
 fn temp_file(name: &str) -> PathBuf {
@@ -219,15 +226,14 @@ fn temp_file(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("island-pr-{}-{nanos}-{name}", std::process::id()))
 }
 
-/// Stop a running writer for this cwd.
+/// Cancel this cwd's PR while its text is being written (gh hasn't been asked to create it yet).
 pub fn cancel(cwd: &str) {
-    if let Some(pid) = WRITING.lock().unwrap().get_or_insert_default().remove(cwd) {
-        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-    }
+    CANCELLED.lock().unwrap().get_or_insert_default().insert(cwd.to_string());
 }
 
 /// Create the PR (ready for review) on `base`, or return the branch's open one.
 pub fn create(tools: &Tools, cwd: &str, agent: &str, base: &str, recap: &str) -> Result<Created, String> {
+    CANCELLED.lock().unwrap().get_or_insert_default().remove(cwd);
     let gh = tools.find("gh").ok_or("gh isn't installed")?;
     let git = tools.find("git").ok_or("git isn't installed")?;
     // Checked again: the branch may have moved since the button appeared.
@@ -248,6 +254,9 @@ pub fn create(tools: &Tools, cwd: &str, agent: &str, base: &str, recap: &str) ->
         Err(e) => return Err(gh_error(&e)),
     }
     let (title, body) = write(tools, cwd, agent, &prompt(&git, cwd, &format!("{}/{base}", r.remote), recap))?;
+    if cancelled(cwd) {
+        return Err("Cancelled".into());
+    }
     let body_file = temp_file("body.md");
     std::fs::write(&body_file, body).map_err(|e| e.to_string())?;
     let body_path = body_file.to_string_lossy().into_owned();

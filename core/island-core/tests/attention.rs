@@ -248,3 +248,16 @@ fn a_subagent_wrap_up_does_not_replace_the_next_step() {
     s.handle(&claude("Stop", json!({})), T0 + 3);
     assert_eq!(pending(&s)[0].questions[0].question, "Commit?");
 }
+
+#[test]
+fn the_apps_create_pr_offer_is_kept_with_its_recap_until_the_next_prompt() {
+    let mut s = Store::default();
+    s.handle(&claude("UserPromptSubmit", json!({})), T0);
+    s.handle(&wrap_up(json!({"recap": "Added the widget.", "actions": [{"action": "commit"}]})), T0 + 1);
+    assert_eq!(s.snapshot().sessions[0].pr_offer, None);
+    s.handle(&wrap_up(json!({"recap": "Added the widget.", "ask": "Open a PR?", "actions": [{"action": "create_pr"}]})), T0 + 2);
+    s.handle(&claude("Stop", json!({})), T0 + 3);
+    assert_eq!(s.snapshot().sessions[0].pr_offer.as_deref(), Some("Added the widget."));
+    s.handle(&claude("UserPromptSubmit", json!({})), T0 + 4);
+    assert_eq!(s.snapshot().sessions[0].pr_offer, None);
+}

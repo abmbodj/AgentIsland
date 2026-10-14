@@ -122,6 +122,8 @@ pub struct Session {
     /// The Claude desktop app's next-step question, shown once the turn ends.
     #[serde(skip)]
     pub next_step: Option<Attention>,
+    /// The desktop app offered to create a PR at the end of the turn: its recap, for the PR text.
+    pub pr_offer: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -321,6 +323,7 @@ impl Store {
                     identity_locked: false,
                     file_changes: BTreeMap::new(),
                     next_step: None,
+                    pr_offer: None,
                 });
                 self.sessions.len() - 1
             }
@@ -373,6 +376,7 @@ impl Store {
             "UserPromptSubmit" => {
                 clear_pending(s, replies);
                 s.next_step = None;
+                s.pr_offer = None;
                 s.state = State::Working;
                 s.since = now;
                 s.activity = "Thinking".into();
@@ -432,6 +436,8 @@ impl Store {
             "PostToolUse" if tool == NEXT_STEP_TOOL && agent_id.is_none() => {
                 // The desktop app's next-step box: answered in the app, so the card only hands off.
                 let ask = p["tool_input"]["ask"].as_str().unwrap_or_default();
+                let offers_pr = p["tool_input"]["actions"].as_array().is_some_and(|a| a.iter().any(|x| x["action"] == "create_pr"));
+                s.pr_offer = offers_pr.then(|| p["tool_input"]["recap"].as_str().unwrap_or_default().to_string());
                 s.next_step = (!ask.is_empty()).then(|| Attention {
                     kind: "question".into(),
                     detail: String::new(),

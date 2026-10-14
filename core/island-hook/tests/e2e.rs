@@ -36,6 +36,10 @@ fn start(name: &str) -> Harness {
 impl Harness {
     /// Run the hook binary like Claude Code would; returns (stdout, elapsed).
     fn hook(&self, fixture_name: &str, payload_patch: Value) -> (String, Duration) {
+        self.hook_env(fixture_name, payload_patch, &[])
+    }
+
+    fn hook_env(&self, fixture_name: &str, payload_patch: Value, extra_env: &[(&str, &str)]) -> (String, Duration) {
         let f = fixture(fixture_name);
         let mut payload = f["payload"].clone();
         for (k, v) in payload_patch.as_object().unwrap() {
@@ -48,6 +52,7 @@ impl Harness {
         }
         // The captured agent is long gone; stand in with a live process (this test runner).
         cmd.env("CLAUDE_PID", std::process::id().to_string());
+        cmd.envs(extra_env.iter().copied());
         let t = Instant::now();
         let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
         child.stdin.take().unwrap().write_all(payload.to_string().as_bytes()).unwrap();
@@ -71,6 +76,16 @@ fn new_session_reaches_the_island_well_under_a_second() {
     assert_eq!(snap["sessions"][0]["project"], "proj");
     assert_eq!(snap["sessions"][0]["state"], "idle");
     assert_eq!(snap["sessions"][0]["pid"], std::process::id());
+}
+
+#[test]
+fn the_islands_own_headless_runs_never_become_sessions() {
+    let h = start("internal");
+    h.hook_env("SessionStart", serde_json::json!({"session_id": "writer"}), &[("AGENT_ISLAND_INTERNAL", "1")]);
+    h.hook("SessionStart", serde_json::json!({}));
+    let ids: Vec<Value> = h.last()["sessions"].as_array().unwrap().iter().map(|s| s["id"].clone()).collect();
+    assert_eq!(ids.len(), 1);
+    assert_ne!(ids[0], "writer");
 }
 
 #[test]
