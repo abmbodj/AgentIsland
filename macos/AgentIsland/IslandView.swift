@@ -29,6 +29,8 @@ final class IslandView: NSView {
     private(set) var hasNotch = true
     private let dot: CGFloat = 6, gap: CGFloat = 6, pad: CGFloat = 11, ear: CGFloat = 6, maxDots = 6
     static let panelWidth: CGFloat = 440
+    /// Room below the notch for the dropped-down panel (see `IslandController.reposition`).
+    static let panelMaxHeight: CGFloat = 460
 
     /// Fixed coordinate space for all drawing ("envelope"); the window only covers `islandRect` of it.
     var envelope = CGSize(width: 620, height: 492)
@@ -180,6 +182,15 @@ final class IslandView: NSView {
                 ctx.allowsImplicitAnimation = true
                 hosting.animator().alphaValue = opening ? 1 : 0
             })
+            if opening && animate, let l = hosting.layer {
+                // Content settles down into the growing island (ease-out-quint); fade only under Reduce Motion.
+                let a = CABasicAnimation(keyPath: "transform.translation.y")
+                a.fromValue = 6
+                a.toValue = 0
+                a.duration = 0.22
+                a.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
+                l.add(a, forKey: "settle")
+            }
             CATransaction.begin()
             CATransaction.setAnimationDuration(animate ? 0.16 : 0)
             pill.opacity = opening ? 0 : 1

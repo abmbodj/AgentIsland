@@ -90,3 +90,65 @@ struct GlyphView: NSViewRepresentable {
         CGSize(width: size, height: size)
     }
 }
+
+/// Official Claude / Codex mark: Claude in its brand clay, Codex in off-white (its mark is monochrome).
+struct AgentMark: View {
+    var agent: String
+    var size: CGFloat = 14
+
+    var body: some View {
+        Image(agent == "codex" ? "CodexMark" : "ClaudeMark")
+            .resizable()
+            .renderingMode(.template)
+            .interpolation(.high)
+            .foregroundStyle(Color(nsColor: agent == "codex" ? Theme.ink : Theme.claudeClay))
+            .frame(width: size, height: size)
+            .accessibilityLabel(Fmt.agentName(agent))
+    }
+}
+
+/// Agent mark with the state glyph as a corner badge (avatar + presence).
+struct AgentBadge: View {
+    var agent: String
+    var state: SessionState
+    var size: CGFloat = 16
+
+    var body: some View {
+        AgentMark(agent: agent, size: size)
+            .overlay(alignment: .bottomTrailing) {
+                GlyphView(agent: agent, state: state, size: 7)
+                    .frame(width: 7, height: 7)
+                    .padding(2)
+                    .background(Circle().fill(Color(nsColor: Theme.notchBlack)))
+                    .offset(x: 4, y: 4)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Fmt.agentName(agent))
+    }
+}
+
+/// Shared press feedback for panel buttons, plus a focus ring when keyboard navigation lands on one.
+struct IslandButtonStyle: ButtonStyle {
+    var radius: CGFloat = 8
+
+    func makeBody(configuration: Configuration) -> some View {
+        Styled(configuration: configuration, radius: radius)
+    }
+
+    private struct Styled: View {
+        let configuration: Configuration
+        let radius: CGFloat
+        @Environment(\.isFocused) private var focused
+
+        var body: some View {
+            configuration.label
+                .scaleEffect(configuration.isPressed && !Theme.reduceMotion ? 0.97 : 1)
+                .opacity(configuration.isPressed ? 0.8 : 1)
+                .overlay(
+                    RoundedRectangle(cornerRadius: radius)
+                        .strokeBorder(Color(nsColor: Theme.ink).opacity(focused ? 0.5 : 0), lineWidth: 1.5)
+                )
+                .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+        }
+    }
+}

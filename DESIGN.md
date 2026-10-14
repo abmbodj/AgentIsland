@@ -34,5 +34,6 @@ Omitted until built (pill, session row, approval card, question card, handoff ca
 - Do pair every state color with a glyph (dot, check, ring, exclamation).
 - Do use spring motion ~200–300 ms, critically damped for routine changes; cross-fade under Reduce Motion.
 - Don't use amber or green for anything except their one meaning; usage ≥90% is bold, not amber.
+- Do identify agents by their official marks: the Claude spark in brand clay (#D97757, the only non-signal hue, used nowhere else) and the Codex knot in off-white. In rows the state glyph sits on the mark as a corner badge.
 - Don't add cards inside cards, metric tiles, gradients, or glow.
 - Don't use em dashes in UI copy.

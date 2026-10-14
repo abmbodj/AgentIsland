@@ -16,5 +16,8 @@ enum Theme {
     /// oklch(0.80 0.17 150), reserved for "finished"
     static let green = NSColor(srgbRed: 0.368, green: 0.861, blue: 0.505, alpha: 1)
 
+    /// Claude brand clay #D97757, oklch(0.67 0.13 39): only on the Claude mark, redder than amber.
+    static let claudeClay = NSColor(srgbRed: 0.851, green: 0.467, blue: 0.341, alpha: 1)
+
     static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 }

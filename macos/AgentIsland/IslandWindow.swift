@@ -148,6 +148,14 @@ final class IslandController {
         observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.expand"), object: nil, queue: .main) { [weak self] n in
             self?.setExpanded((n.object as? String) != "collapse", pinned: true)
         }))
+        // Writes a PNG of the island window to a path under /tmp (no Screen Recording permission needed).
+        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.snapshot"), object: nil, queue: .main) { [weak self] n in
+            guard let path = n.object as? String, path.hasPrefix("/tmp/") || path.hasPrefix("/private/tmp/"),
+                  let v = self?.panel.contentView,
+                  let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return }
+            v.cacheDisplay(in: v.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        }))
         #endif
     }
 
@@ -367,7 +375,7 @@ final class IslandController {
         geometry = g
         // Envelope: the drawing space for wings and the dropped-down panel, anchored at the screen top.
         let w = max(g.notch.width + 440, IslandView.panelWidth + 80)
-        let h = g.notch.height + 460
+        let h = g.notch.height + IslandView.panelMaxHeight
         envelopeOrigin = CGPoint(x: g.notch.midX - w / 2, y: screen.frame.maxY - h)
         view.envelope = CGSize(width: w, height: h)
         view.configure(notchWidth: g.notch.width, notchHeight: g.notch.height, hasNotch: g.hasNotch)

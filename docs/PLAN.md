@@ -18,7 +18,7 @@ A calm, notch-style status light for local AI coding agents: Claude Code and Cod
 - D5: At slice 0, `brew install rustup tmux xcodegen` and `brew install --cask iterm2 ghostty`. rustup gets the aarch64 and x86_64 darwin targets.
 - D6: macOS 14+. (Material superseded 2026-10-14: after reviewing Liquid Glass on screen at tints 0.45/0.35/0.20, the user chose a solid black panel; no glass or blur on any version.)
 - D7: Developer ID signing, hardened runtime plus the apple-events entitlement, notarize, staple, DMG, and a Sparkle 2 EdDSA appcast on GitHub Releases (`scripts/release.sh`). The first-run toggle "Automatically check for updates" defaults ON and is labelled as the only network request. Not the Mac App Store. The user creates the Developer ID cert and notarytool credentials.
-- D20: Name **Agent Island**, bundle `com.abmbodj.agentisland`, support dir `~/Library/Application Support/AgentIsland/`. We draw our own agent glyphs; no vendor logos.
+- D20: Name **Agent Island**, bundle `com.abmbodj.agentisland`, support dir `~/Library/Application Support/AgentIsland/`. Agent identity uses the official Claude and Codex marks (revised 2026-10-14), Claude in its brand clay, Codex in off-white; clay appears only on the mark so amber and green keep their single meanings.
 - D27: Windows shell is C# WPF on .NET 8 over the Rust C ABI, confirmed by a 1-day spike at the start of slice 5. Testing happens on the user's separate Windows PC (D26). Windows release builds come from GitHub Actions.
 
 **Detection & integration**

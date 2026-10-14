@@ -141,7 +141,8 @@ enum Fmt {
         let s = max(0, Int(now.timeIntervalSince1970) - Int(ms / 1000))
         switch s {
         case ..<60: return "\(s)s"
-        case ..<3600: return "\(s / 60)m \(String(format: "%02d", s % 60))s"
+        // ponytail: whole minutes past 60 s, so peripheral vision doesn't see a ticking clock.
+        case ..<3600: return "\(s / 60)m"
         case ..<86400: return "\(s / 3600)h \(String(format: "%02d", s % 3600 / 60))m"
         default: return "\(s / 86400)d"
         }
@@ -174,25 +175,40 @@ private struct HeightKey: PreferenceKey {
 
 struct PanelView: View {
     @ObservedObject var model: PanelModel
+    /// Measured so the rows get whatever height the card and usage strip leave, and scroll past that.
+    @State private var cardHeight: CGFloat = 0
+    @State private var rowsHeight: CGFloat = 0
+    @State private var stripHeight: CGFloat = 0
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: model.isOpen ? 1 : 3600)) { ctx in
             VStack(alignment: .leading, spacing: 0) {
                 if model.snapshot.sessions.isEmpty {
                     VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 8) {
+                            AgentMark(agent: "claude", size: 14)
+                            AgentMark(agent: "codex", size: 14)
+                        }
+                        .padding(.bottom, 6)
+                        .accessibilityHidden(true)
                         Text("No agent sessions").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
                         Text("Start Claude Code or Codex and it appears here.").font(.system(size: 11)).foregroundStyle(secondary)
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-                } else if model.snapshot.sessions.count > 7 {
-                    CardArea(model: model)
-                    ScrollView { rows(ctx.date) }.frame(height: 5 * 47)
                 } else {
-                    CardArea(model: model)
-                    rows(ctx.date)
+                    VStack(alignment: .leading, spacing: 0) { CardArea(model: model) }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0 }
+                    // Panel padding is 4 top + 10 bottom.
+                    let room = max(60, IslandView.panelMaxHeight - 14 - cardHeight - stripHeight)
+                    ScrollView {
+                        rows(ctx.date)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowsHeight = $0 }
+                    }
+                    .frame(height: rowsHeight == 0 ? nil : min(rowsHeight, room))
                 }
                 UsageStrip(usage: model.snapshot.usage, now: ctx.date)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stripHeight = $0 }
             }
         }
         .padding(.horizontal, 8)
@@ -209,17 +225,17 @@ struct PanelView: View {
     }
 
     private func rows(_ now: Date) -> some View {
-                    VStack(spacing: 1) {
-                        ForEach(model.snapshot.sessions) { s in
-                            SessionRow(session: s, now: now, model: model, showAgent: Set(model.snapshot.sessions.map(\.agent)).count > 1)
-                            if model.openGroups.contains(s.id) {
-                                ForEach(s.subagents, id: \.id) { sub in
-                                    SubagentRow(sub: sub, now: now)
-                                        .transition(.opacity)
-                                }
-                            }
-                        }
+        VStack(spacing: 1) {
+            ForEach(model.snapshot.sessions) { s in
+                SessionRow(session: s, now: now, model: model)
+                if model.openGroups.contains(s.id) {
+                    ForEach(s.subagents, id: \.id) { sub in
+                        SubagentRow(sub: sub, agent: s.agent, now: now)
+                            .transition(.opacity)
                     }
+                }
+            }
+        }
     }
 }
 
@@ -227,8 +243,8 @@ private struct SessionRow: View {
     let session: SessionInfo
     let now: Date
     @ObservedObject var model: PanelModel
-    var showAgent: Bool
     @State private var hover = false
+    @State private var pressed = false
 
     private var status: (String, Color) {
         switch session.state {
@@ -246,8 +262,8 @@ private struct SessionRow: View {
         let open = model.openGroups.contains(session.id)
         let running = session.subagents.filter { !$0.done }.count
         HStack(alignment: .center, spacing: 10) {
-            GlyphView(agent: session.agent, state: session.state, size: 8)
-                .frame(width: 8, height: 8)
+            AgentBadge(agent: session.agent, state: session.state, size: 16)
+                .frame(width: 18, height: 18)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(session.project.isEmpty ? "Session" : session.project)
@@ -283,19 +299,16 @@ private struct SessionRow: View {
                         .help(open ? "Hide subagents" : "Show subagents")
                         .accessibilityLabel("\(session.subagents.count) subagents")
                     }
-                    if showAgent {
-                        Text(Fmt.agentName(session.agent))
-                            .font(.system(size: 11))
-                            .foregroundStyle(muted)
-                    }
                 }
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(hover ? 0.07 : 0)))
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(pressed ? 0.11 : hover ? 0.07 : 0)))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
+        // Press tint only; the tap stays a plain onTapGesture so the subagent chip's button still wins its own clicks.
+        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in pressed = true }.onEnded { _ in pressed = false })
         .onTapGesture { model.onJump(session) }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
@@ -305,6 +318,7 @@ private struct SessionRow: View {
 
 private struct SubagentRow: View {
     let sub: Subagent
+    let agent: String
     let now: Date
 
     var body: some View {
@@ -313,7 +327,7 @@ private struct SubagentRow: View {
                 if sub.done {
                     Image(systemName: "checkmark").font(.system(size: 8, weight: .bold)).foregroundStyle(green)
                 } else {
-                    GlyphView(agent: "claude", state: .working, size: 5)
+                    GlyphView(agent: agent, state: .working, size: 5)
                 }
             }
             .frame(width: 8, height: 8)
@@ -330,7 +344,7 @@ private struct SubagentRow: View {
                 .font(.system(size: 11).monospacedDigit())
                 .foregroundStyle(muted)
         }
-        .padding(.leading, 38)
+        .padding(.leading, 48)
         .padding(.trailing, 10)
         .padding(.vertical, 4)
         .opacity(sub.done ? 0.6 : 1)
@@ -343,12 +357,12 @@ private struct UsageStrip: View {
     let now: Date
 
     var body: some View {
-        let agents = [("Claude", usage.claude), ("Codex", usage.codex)].compactMap { n, u in u.map { (n, $0) } }
+        let agents = [("claude", usage.claude), ("codex", usage.codex)].compactMap { n, u in u.map { (n, $0) } }
         if !agents.isEmpty {
             HStack(spacing: 14) {
-                ForEach(agents, id: \.0) { name, u in
+                ForEach(agents, id: \.0) { agent, u in
                     HStack(spacing: 6) {
-                        Text(name).foregroundStyle(muted)
+                        AgentMark(agent: agent, size: 11)
                         ForEach(u.windows, id: \.label) { w in
                             Text("\(w.label) \(Int(w.usedPercent.rounded()))%")
                                 .fontWeight(w.usedPercent >= 90 ? .bold : .regular)
