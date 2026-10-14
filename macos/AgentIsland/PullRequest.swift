@@ -118,78 +118,136 @@ extension PanelModel {
 
 private let ink = Color(nsColor: Theme.ink)
 private let secondary = Color(nsColor: Theme.secondary)
-private let muted = Color(nsColor: Theme.muted)
 
 /// The Open PR control on a session row or next-step card; empty unless the branch is ready.
+/// Rows get the compact subagent-chip size (15 pt) and stay quiet; the card matches its 28 pt buttons.
 struct PRButton: View {
     @ObservedObject var model: PanelModel
     let session: SessionInfo
+    var card = false
 
     var body: some View {
         switch model.pr[session.id] {
         case .ready(let r):
-            HStack(spacing: 2) {
-                chip("Open PR") { model.startPR(session) }
-                    .accessibilityHint("Creates a pull request into \(model.prBase[session.id] ?? r.base) after a 2 second undo window")
-                basePicker(r)
+            let base = model.prBase[session.id] ?? r.base
+            // One capsule: the action on the left, the base branch it targets on the right.
+            HStack(spacing: 0) {
+                Chip(card: card, squared: .trailing) { model.startPR(session) } label: { Text("Open PR") }
+                    .accessibilityLabel("Open pull request")
+                    .accessibilityHint("Creates a pull request into \(base) after a 2 second undo window")
+                basePicker(r, base: base)
             }
         case .staged(_, let base, let started):
-            Button { model.undoPR(session.id) } label: {
-                HStack(spacing: 5) {
-                    UndoRing(started: started)
-                    Text("PR → \(base) · Undo").font(.system(size: 11, weight: .medium)).foregroundStyle(ink)
-                }
-                .padding(.horizontal, 7).frame(height: 20)
-                .background(Capsule().fill(Color.white.opacity(0.12)))
+            Chip(card: card) { model.undoPR(session.id) } label: {
+                UndoRing(started: started)
+                Text("PR → \(base) · Undo")
             }
-            .buttonStyle(IslandButtonStyle(radius: 10))
             .accessibilityLabel("Undo creating the pull request")
         case .writing(let cancelling):
             HStack(spacing: 6) {
-                Text(cancelling ? "Cancelling…" : "Writing PR…").font(.system(size: 11)).foregroundStyle(secondary)
-                if !cancelling { chip("Cancel") { model.cancelPR(session) } }
+                Text(cancelling ? "Cancelling…" : "Writing PR…").font(.system(size: card ? 12 : 11)).foregroundStyle(secondary)
+                if !cancelling {
+                    Chip(card: card) { model.cancelPR(session) } label: { Text("Cancel") }
+                        .accessibilityLabel("Cancel writing the pull request")
+                }
             }
+            .fixedSize()
         case .done(let c):
-            chip("PR #\(c.number)") { if let url = URL(string: c.url) { NSWorkspace.shared.open(url) } }
-                .help(c.url)
-                .accessibilityHint("Opens the pull request in your browser")
+            Chip(card: card) { if let url = URL(string: c.url) { NSWorkspace.shared.open(url) } } label: {
+                Text("PR #\(c.number)")
+                Image(systemName: "arrow.up.right").font(.system(size: card ? 9 : 8, weight: .semibold))
+            }
+            .help(c.url)
+            .accessibilityLabel("Pull request \(c.number)")
+            .accessibilityHint("Opens it in your browser")
         case .failed(_, let reason):
             HStack(spacing: 6) {
-                Text(reason).font(.system(size: 11)).foregroundStyle(muted).lineLimit(1).truncationMode(.tail)
-                chip("Retry") { model.retryPR(session) }
+                Text(reason).font(.system(size: card ? 12 : 11)).foregroundStyle(secondary)
+                    .lineLimit(1).truncationMode(.tail)
+                    .frame(maxWidth: card ? 220 : 150, alignment: .trailing)
+                    .help(reason)
+                    .accessibilityLabel("Pull request failed: \(reason)")
+                Chip(card: card) { model.retryPR(session) } label: { Text("Retry") }
+                    .accessibilityLabel("Retry the pull request")
             }
+            // Gives way first, so the row's status stays whole; the full reason is on hover.
+            .layoutPriority(-1)
         case nil:
             EmptyView()
         }
     }
 
-    @ViewBuilder private func basePicker(_ r: PRReady) -> some View {
-        let base = model.prBase[session.id] ?? r.base
+    @ViewBuilder private func basePicker(_ r: PRReady, base: String) -> some View {
+        let label = HStack(spacing: 3) {
+            // ponytail: middle-elided by character count, since the chip is fixed-size and can't truncate itself.
+            Text("→ \(base.count > 22 ? base.prefix(10) + "…" + base.suffix(10) : base)").lineLimit(1)
+            if r.bases.count > 1 { Image(systemName: "chevron.down").font(.system(size: card ? 8 : 7, weight: .semibold)) }
+        }
+        .font(.system(size: card ? 12 : 11))
         if r.bases.count > 1 {
+            // A real NSMenu pops without activating the app, so it works in the non-activating panel.
             Menu {
-                ForEach(r.bases, id: \.self) { b in
-                    Button { model.prBase[session.id] = b } label: {
-                        if b == base { Label(b, systemImage: "checkmark") } else { Text(b) }
-                    }
+                Picker("Base branch", selection: Binding(get: { base }, set: { model.prBase[session.id] = $0 })) {
+                    ForEach(r.bases, id: \.self) { Text($0).tag($0) }
                 }
+                .pickerStyle(.inline)
+                .labelsHidden()
             } label: {
-                Text("→ \(base)").font(.system(size: 11)).foregroundStyle(secondary)
+                ChipBody(card: card, squared: .leading) { label }
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.visible)
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
             .fixedSize()
-            .accessibilityLabel("Base branch \(base)")
+            .help("Choose the base branch")
+            .accessibilityLabel("Base branch, \(base)")
         } else {
-            Text("→ \(base)").font(.system(size: 11)).foregroundStyle(secondary).padding(.horizontal, 4)
+            ChipBody(card: card, squared: .leading, interactive: false) { label }
+                .accessibilityLabel("Into \(base)")
         }
     }
+}
 
-    private func chip(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(ink)
-                .padding(.horizontal, 8).frame(height: 20)
-                .background(Capsule().fill(Color.white.opacity(0.12)))
-        }
-        .buttonStyle(IslandButtonStyle(radius: 10))
+/// A capsule chip: compact (11 pt, subagent-chip size) in rows, 12 pt × 28 pt in cards.
+/// `squared` is the edge that butts against a neighbour, so two chips read as one split control.
+private struct Chip<L: View>: View {
+    let card: Bool
+    var squared: Edge? = nil
+    let action: () -> Void
+    @ViewBuilder let label: L
+
+    var body: some View {
+        Button(action: action) { ChipBody(card: card, squared: squared) { HStack(spacing: 5) { label } } }
+            .buttonStyle(IslandButtonStyle(radius: card ? 8 : 7.5))
+            .fixedSize()
+    }
+}
+
+private struct ChipBody<C: View>: View {
+    let card: Bool
+    var squared: Edge? = nil
+    var interactive = true
+    @ViewBuilder let content: C
+    @State private var hover = false
+
+    var body: some View {
+        let r: CGFloat = card ? 8 : 7.5
+        content
+            .font(.system(size: card ? 12 : 11, weight: .medium))
+            .foregroundStyle(hover && interactive ? ink : secondary)
+            .padding(.horizontal, card ? 12 : 7)
+            .frame(height: card ? 28 : 15)
+            .background(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: squared == .leading ? 0 : r, bottomLeadingRadius: squared == .leading ? 0 : r,
+                    bottomTrailingRadius: squared == .trailing ? 0 : r, topTrailingRadius: squared == .trailing ? 0 : r)
+                    .fill(Color.white.opacity(hover && interactive ? (card ? 0.16 : 0.12) : (card ? 0.1 : 0.07)))
+            )
+            .overlay(alignment: .leading) {
+                // Hairline divider between the two halves of a split control.
+                if squared == .leading { Rectangle().fill(Color.white.opacity(0.1)).frame(width: 1).padding(.vertical, card ? 7 : 3) }
+            }
+            .contentShape(Rectangle())
+            .onHover { hover = $0 }
     }
 }

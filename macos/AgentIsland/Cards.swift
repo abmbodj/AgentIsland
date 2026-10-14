@@ -268,7 +268,7 @@ private struct CardView: View {
             }
             Text("Answer it in \(Fmt.agentName(session.agent)).").font(.system(size: 12)).foregroundStyle(secondary)
             HStack {
-                PRButton(model: model, session: session)
+                PRButton(model: model, session: session, card: true)
                 Spacer()
                 Button { model.onJump(session) } label: {
                     Text(session.agent == "codex" && session.terminal.bundleId == "com.openai.codex" ? "Open in Codex" : "Open session").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.black.opacity(0.85))
