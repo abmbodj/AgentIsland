@@ -97,6 +97,15 @@ fn plan_approval_clears_when_the_tool_completes_with_a_different_input() {
 }
 
 #[test]
+fn a_parallel_call_of_the_same_tool_leaves_the_pending_approval() {
+    let mut s = store_with_session();
+    s.handle(&claude("PermissionRequest-Bash", json!({})), T0 + 1);
+    s.handle(&claude("PostToolUse-Bash", json!({"tool_input": {"command": "ls"}})), T0 + 2);
+    assert_eq!(s.snapshot().attention, 1);
+    assert_eq!(only(&s).state, State::NeedsInput);
+}
+
+#[test]
 fn tool_activity_while_waiting_for_input_keeps_needs_input() {
     let mut s = store_with_session();
     s.handle(&claude("PermissionRequest-Bash", json!({})), T0 + 2);
