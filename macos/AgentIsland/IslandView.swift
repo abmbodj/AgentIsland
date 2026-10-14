@@ -122,6 +122,7 @@ final class IslandView: NSView {
         let notchL = mid - notchWidth / 2, notchR = mid + notchWidth / 2
         let animate = animated && !Theme.reduceMotion
         let wasExpanded = self.expanded
+        let wasHidden = fill.opacity == 0
         self.expanded = expanded && visible
 
         // Collapsed wings.
@@ -137,6 +138,7 @@ final class IslandView: NSView {
 
         // Target silhouette.
         let path: CGPath?
+        let hidden = !self.expanded && sessions.isEmpty
         if self.expanded {
             let w = Self.panelWidth
             let measured = model.contentHeight > 0 ? model.contentHeight : hosting.fittingSize.height
@@ -148,7 +150,8 @@ final class IslandView: NSView {
         } else if sessions.isEmpty {
             // Invisible: the hardware notch alone (still hoverable on notched displays).
             islandRect = hasNotch ? CGRect(x: notchL, y: H - notchHeight, width: notchWidth, height: notchHeight) : .zero
-            path = nil
+            // Notch-sized but hidden, so opening grows out of the notch instead of popping in.
+            path = islandPath(x0: notchL, x1: notchR, bottom: H - notchHeight, radius: min(10, notchHeight / 3))
         } else {
             islandRect = CGRect(x: cl - (hasNotch ? ear : 0), y: H - notchHeight, width: cr - cl + (hasNotch ? 2 * ear : 0), height: notchHeight)
             path = islandPath(x0: cl, x1: cr, bottom: H - notchHeight, radius: min(10, notchHeight / 3))
@@ -159,6 +162,19 @@ final class IslandView: NSView {
         let from = fill.presentation()?.path ?? fill.path
         for l in [fill] {
             l.path = path
+            l.opacity = hidden ? 0 : 1
+            if animate, hidden, !wasHidden {
+                // Fade only after the shrink lands on the notch.
+                let f = CABasicAnimation(keyPath: "opacity")
+                f.fromValue = 1
+                f.toValue = 0
+                f.beginTime = CACurrentMediaTime() + 0.2
+                f.duration = 0.1
+                f.fillMode = .backwards
+                l.add(f, forKey: "fade")
+            } else {
+                l.removeAnimation(forKey: "fade")
+            }
             if animate, let from, let path {
                 let a = CASpringAnimation(keyPath: "path")
                 a.fromValue = from
