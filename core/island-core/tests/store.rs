@@ -348,3 +348,31 @@ fn proposals_and_subagent_calls_do_not_wait_for_you() {
     assert_eq!(only(&s).state, State::Working);
     assert_eq!(s.snapshot().attention, 0);
 }
+
+#[test]
+fn desktop_sessions_take_the_apps_title_then_their_repo_name() {
+    let dir = std::env::temp_dir().join(format!("island-ccd-{}", std::process::id()));
+    let org = dir.join("acct").join("org");
+    std::fs::create_dir_all(&org).unwrap();
+    let file = org.join("local_abc-1.json");
+    std::fs::write(&file, r#"{"title":"","originCwd":"/Users/me/AgentShelf2"}"#).unwrap();
+    let mut s = Store::default();
+    s.desktop_sessions = Some(dir.clone());
+    let mut m = claude("SessionStart", json!({}));
+    m.env.insert("CLAUDE_CODE_HOST_SESSION_ID".into(), "local_abc-1".into());
+    s.handle(&m, T0);
+    assert_eq!(only(&s).project, "AgentShelf2");
+    // The app names the session after the first turn.
+    std::fs::write(&file, r#"{"title":"Open PR button design","originCwd":"/Users/me/AgentShelf2"}"#).unwrap();
+    let mut stop = claude("Stop", json!({}));
+    stop.env = m.env.clone();
+    s.handle(&stop, T0 + 1);
+    assert_eq!(only(&s).project, "Open PR button design");
+    // An id that isn't the app's shape is never used as a path.
+    m.env.insert("CLAUDE_CODE_HOST_SESSION_ID".into(), "../acct/org/local_abc-1".into());
+    let mut other = Store::default();
+    other.desktop_sessions = Some(dir.clone());
+    other.handle(&m, T0);
+    assert_ne!(only(&other).project, "Open PR button design");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

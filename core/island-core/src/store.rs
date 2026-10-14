@@ -4,6 +4,7 @@ use crate::protocol::HookMessage;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 pub type Millis = u64;
 
@@ -167,6 +168,25 @@ impl Terminal {
     }
 }
 
+/// The desktop app's title for a session, else its repo's name (a worktree's cwd is a scratch folder).
+fn desktop_name(dir: &Path, local_id: &str) -> Option<String> {
+    // The id comes from a hook's environment and becomes a file name: only the app's own shape.
+    let id = local_id.strip_prefix("local_")?;
+    if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return None;
+    }
+    for account in std::fs::read_dir(dir).ok()?.flatten() {
+        for org in std::fs::read_dir(account.path()).into_iter().flatten().flatten() {
+            let Ok(text) = std::fs::read_to_string(org.path().join(format!("{local_id}.json"))) else { continue };
+            let v: Value = serde_json::from_str(&text).ok()?;
+            let title = v["title"].as_str().filter(|t| !t.trim().is_empty());
+            let repo = v["originCwd"].as_str().and_then(|c| c.rsplit('/').find(|s| !s.is_empty()));
+            return title.or(repo).map(str::to_string);
+        }
+    }
+    None
+}
+
 /// Claude desktop tools that wait for the user in the app's own UI rather than asking permission.
 fn desktop_prompt(tool: &str, input: &Value) -> Option<&'static str> {
     match tool {
@@ -233,6 +253,8 @@ pub struct Store {
     replies: Vec<(u64, String)>,
     /// JSON-RPC responses owed to app-server connections: (connection, message).
     appserver_replies: Vec<(u64, Value)>,
+    /// The Claude desktop app's session metadata (`<account>/<org>/local_<id>.json`); None = don't look.
+    pub desktop_sessions: Option<PathBuf>,
 }
 
 /// Withdraw every pending item, releasing waiting hooks with an empty (no-decision) reply.
@@ -306,18 +328,27 @@ impl Store {
         self.next_id += 1;
         let attention_id = self.next_id;
         let replies = &mut self.replies;
+        let desktop_sessions = self.desktop_sessions.as_deref();
         let s = &mut self.sessions[idx];
         let tool = p["tool_name"].as_str().unwrap_or_default();
         let agent_id = p["agent_id"].as_str();
         s.last_event = now;
+        let event = p["hook_event_name"].as_str().unwrap_or_default();
         if !s.identity_locked {
+            let host = s.terminal.host_session.take();
             s.terminal = Terminal::from(msg);
             if let Some(pid) = msg.env.get("CLAUDE_PID").and_then(|v| v.parse().ok()) {
                 s.pid = Some(pid);
             }
+            // The app titles a session after its first turn, so look again when a turn ends.
+            if s.terminal.host_session != host || matches!(event, "SessionStart" | "Stop") {
+                if let Some(name) = desktop_sessions.zip(s.terminal.host_session.as_deref()).and_then(|(d, id)| desktop_name(d, id)) {
+                    s.project = name;
+                }
+            }
         }
 
-        match p["hook_event_name"].as_str().unwrap_or_default() {
+        match event {
             "SessionStart" => {
                 if matches!(s.state, State::Ended | State::Error | State::Stale) {
                     s.set(State::Idle, now);
