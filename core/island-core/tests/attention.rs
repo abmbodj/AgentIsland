@@ -176,3 +176,39 @@ fn subagent_requests_say_which_subagent_asks() {
     s.handle(&claude("PermissionRequest-Bash", json!({"agent_id":"ab77a0d0ea52d01b9","agent_type":"Explore"})), T0 + 1);
     assert_eq!(pending(&s)[0].subagent.as_deref(), Some("Explore"));
 }
+
+fn wrap_up(input: Value) -> island_core::protocol::HookMessage {
+    claude("PostToolUse-Bash", json!({"tool_name": "mcp__ccd_turn__wrap_up", "tool_input": input, "tool_response": []}))
+}
+
+#[test]
+fn a_desktop_next_step_question_waits_on_the_island_until_the_user_replies() {
+    let mut s = Store::default();
+    s.handle(&claude("UserPromptSubmit", json!({})), T0);
+    s.handle(&wrap_up(json!({"recap": "Fixed the bug. Nothing committed.", "ask": "Commit this fix?",
+        "actions": [{"action": "commit"}, {"label": "Not yet"}]})), T0 + 1);
+    assert!(pending(&s).is_empty(), "the box shows only once the turn ends");
+    s.handle(&claude("Stop", json!({})), T0 + 2);
+
+    let a = &pending(&s)[0];
+    assert!(!a.held, "nothing to reply to: it is answered in the app");
+    assert_eq!(a.kind, "question");
+    assert_eq!(a.questions[0].question, "Commit this fix?");
+    assert_eq!(a.note.as_deref(), Some("Fixed the bug. Nothing committed."));
+    assert_eq!(state(&s), State::NeedsInput);
+    assert!(reply(&mut s).is_empty());
+
+    s.handle(&claude("UserPromptSubmit", json!({})), T0 + 3);
+    assert!(pending(&s).is_empty());
+    assert_eq!(state(&s), State::Working);
+}
+
+#[test]
+fn a_recap_without_a_question_just_finishes() {
+    let mut s = Store::default();
+    s.handle(&claude("UserPromptSubmit", json!({})), T0);
+    s.handle(&wrap_up(json!({"recap": "Done."})), T0 + 1);
+    s.handle(&claude("Stop", json!({})), T0 + 2);
+    assert!(pending(&s).is_empty());
+    assert_eq!(state(&s), State::Finished);
+}

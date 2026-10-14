@@ -257,8 +257,12 @@ private struct CardView: View {
 
     private var handoff: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(item.kind == "question" ? "Asks a question in the session" : item.title)
+            Text(item.questions.first?.question ?? (item.kind == "question" ? "Asks a question in the session" : item.title))
                 .font(.system(size: 15, weight: .semibold)).foregroundStyle(ink)
+                .fixedSize(horizontal: false, vertical: true)
+            if let note = item.note, !note.isEmpty {
+                Text(note).font(.system(size: 12)).foregroundStyle(secondary).fixedSize(horizontal: false, vertical: true)
+            }
             if !item.detail.isEmpty {
                 Text(item.detail).font(.system(size: 12, design: .monospaced)).foregroundStyle(secondary).lineLimit(2)
             }

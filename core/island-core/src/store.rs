@@ -118,6 +118,9 @@ pub struct Session {
     /// Codex file changes seen in `item/started`, by item id, for approval diffs.
     #[serde(skip)]
     pub file_changes: BTreeMap<String, (String, DiffPreview)>,
+    /// The Claude desktop app's next-step question, shown once the turn ends.
+    #[serde(skip)]
+    pub next_step: Option<Attention>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -272,6 +275,7 @@ impl Store {
                     conn: None,
                     identity_locked: false,
                     file_changes: BTreeMap::new(),
+                    next_step: None,
                 });
                 self.sessions.len() - 1
             }
@@ -314,6 +318,7 @@ impl Store {
             }
             "UserPromptSubmit" => {
                 clear_pending(s, replies);
+                s.next_step = None;
                 s.state = State::Working;
                 s.since = now;
                 s.activity = "Thinking".into();
@@ -359,6 +364,28 @@ impl Store {
                 s.set(State::NeedsInput, now);
                 return Some(attention_id);
             }
+            "PostToolUse" if tool == "mcp__ccd_turn__wrap_up" => {
+                // The desktop app's next-step box: answered in the app, so the card only hands off.
+                let ask = p["tool_input"]["ask"].as_str().unwrap_or_default();
+                s.next_step = (!ask.is_empty()).then(|| Attention {
+                    kind: "question".into(),
+                    title: "Next step".into(),
+                    detail: String::new(),
+                    questions: vec![Question {
+                        id: String::new(),
+                        question: ask.into(),
+                        header: String::new(),
+                        options: vec![],
+                        multi_select: false,
+                        allows_other: false,
+                        secret: false,
+                    }],
+                    can_allow_session: false,
+                    held: false,
+                    note: p["tool_input"]["recap"].as_str().map(str::to_string),
+                    ..attention(attention_id, tool, &Value::Null, now, None)
+                });
+            }
             "PostToolUse" | "PostToolUseFailure" => {
                 // Answered in the terminal: free the hook that is still waiting on us.
                 // The tool's input may gain fields by now (AskUserQuestion adds "answers"), so match
@@ -383,6 +410,11 @@ impl Store {
             }
             "Stop" => {
                 clear_pending(s, replies);
+                if let Some(a) = s.next_step.take() {
+                    s.pending.push(a);
+                    s.set(State::NeedsInput, now);
+                    return None;
+                }
                 let running = p["background_tasks"]
                     .as_array()
                     .map_or(0, |t| t.iter().filter(|t| t["status"] == "running").count());
