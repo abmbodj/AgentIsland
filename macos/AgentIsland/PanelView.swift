@@ -2,7 +2,9 @@ import SwiftUI
 
 /// State shared between the island controller and the SwiftUI panel.
 final class PanelModel: ObservableObject {
-    @Published var snapshot = Snapshot()
+    @Published var snapshot = Snapshot() {
+        didSet { updatePRs(old: oldValue) }
+    }
     /// Parent sessions whose subagents are shown (collapsed by default).
     @Published var openGroups: Set<String> = []
     /// Row-level hint after a jump fell back (e.g. Automation permission declined).
@@ -10,7 +12,12 @@ final class PanelModel: ObservableObject {
     /// Laid-out height of the panel content, reported by SwiftUI.
     @Published var contentHeight: CGFloat = 0
     /// Only tick the elapsed-time clock while the panel is open.
-    @Published var isOpen = false
+    @Published var isOpen = false {
+        didSet { if isOpen && !oldValue { refreshPRs() } }
+    }
+    /// Open PR button state and chosen base branch, by session id.
+    @Published var pr: [String: PRState] = [:]
+    @Published var prBase: [String: String] = [:]
     /// Keyboard mode (⌥⌘I): the panel is key, so shortcuts and typing work.
     @Published var summoned = false
     /// Which waiting card is shown, as an index into `cards`.
@@ -282,6 +289,7 @@ private struct SessionRow: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 8)
+                    PRButton(model: model, session: session)
                     if !session.subagents.isEmpty {
                         Button {
                             withAnimation(.easeOut(duration: Theme.reduceMotion ? 0 : 0.18)) {
@@ -313,6 +321,17 @@ private struct SessionRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Shows this session's terminal")
+        // The row is one combined element, so its PR control is offered as actions.
+        .accessibilityActions {
+            switch model.pr[session.id] {
+            case .ready: Button("Open pull request") { model.startPR(session) }
+            case .staged: Button("Undo pull request") { model.undoPR(session.id) }
+            case .writing(false): Button("Cancel pull request") { model.cancelPR(session) }
+            case .done(let c): Button("Open PR #\(c.number)") { if let url = URL(string: c.url) { NSWorkspace.shared.open(url) } }
+            case .failed: Button("Retry pull request") { model.retryPR(session) }
+            default: EmptyView()
+            }
+        }
     }
 }
 

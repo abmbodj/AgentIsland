@@ -253,6 +253,7 @@ struct SettingsView: View {
     @AppStorage("soundNeedsInput") private var soundNeedsInput = "Glass"
     @AppStorage("soundFinished") private var soundFinished = "Tink"
     @AppStorage("soundVolume") private var soundVolume = 0.6
+    @AppStorage("openPRAfterCreate") private var openPRAfterCreate = false
     @State private var hotKey = HotKey.shared.display
     @State private var recording = false
     @State private var recorder: Any?
@@ -275,6 +276,7 @@ struct SettingsView: View {
                     Text("All displays").tag("all")
                 }
                 Toggle("Expand when an agent needs you", isOn: $autoExpand)
+                Toggle("Open pull requests in the browser after creating them", isOn: $openPRAfterCreate)
                 LabeledContent("Hover delay") {
                     HStack {
                         Slider(value: $hoverDelay, in: 0...1, step: 0.05).frame(width: 160)
@@ -294,7 +296,7 @@ struct SettingsView: View {
                 LabeledContent("Volume") {
                     Slider(value: $soundVolume, in: 0...1).frame(width: 160)
                 }
-                Text("Silent when you're already looking at that session, and never more than once every 10 seconds.")
+                Text("Never more than once every 10 seconds.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Agents") {

@@ -112,6 +112,8 @@ fn main() {
                 }
             }
         }
+        // The island's own headless runs (writing a PR) are not sessions.
+        "claude" | "codex" if std::env::var_os("AGENT_ISLAND_INTERNAL").is_some() => {}
         agent @ ("claude" | "codex") => {
             let event = serde_json::from_str::<Value>(&payload).ok().and_then(|v| v["hook_event_name"].as_str().map(str::to_string));
             // Approvals wait for the user (the agent's own timeout bounds us); everything else is quick.

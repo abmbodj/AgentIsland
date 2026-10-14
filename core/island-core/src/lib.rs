@@ -8,3 +8,4 @@ pub mod ffi;
 pub mod diff;
 pub mod codex_appserver;
 pub mod procscan;
+pub mod pr;

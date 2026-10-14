@@ -454,6 +454,10 @@ impl Core {
     }
 
     /// Synchronous requests from the UI (installer). Returns `{"ok":..}` or `{"error":..}`.
+    fn tools(&self) -> crate::pr::Tools {
+        crate::pr::Tools::standard(&self.inner.home)
+    }
+
     pub fn call(&self, req: &Value) -> Value {
         let it = &self.inner.integrations;
         let r: Result<Value, String> = match req["op"].as_str().unwrap_or_default() {
@@ -466,6 +470,16 @@ impl Core {
             "applyUninstall" => serde_json::from_value::<UninstallMode>(req["mode"].clone())
                 .map_err(|e| e.to_string())
                 .and_then(|m| it.apply_uninstall(m).map(|_| Value::Null)),
+            // Run off the main thread: these call git, gh and a headless agent.
+            "prReady" => Ok(json!(crate::pr::ready(&self.tools(), req["cwd"].as_str().unwrap_or_default(), req["offered"] == true))),
+            "prCreate" => {
+                let s = |k: &str| req[k].as_str().unwrap_or_default();
+                crate::pr::create(&self.tools(), s("cwd"), s("agent"), s("base"), s("recap")).map(|c| json!(c))
+            }
+            "prCancel" => {
+                crate::pr::cancel(req["cwd"].as_str().unwrap_or_default());
+                Ok(Value::Null)
+            }
             "snapshot" => Ok(serde_json::from_str(&Inner::snapshot_json(&self.inner.lock())).unwrap_or(Value::Null)),
             op => Err(format!("unknown op {op}")),
         };
