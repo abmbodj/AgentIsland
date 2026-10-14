@@ -241,6 +241,27 @@ fn quiet_working_session_without_pid_goes_stale_then_is_dropped() {
 }
 
 #[test]
+fn quiet_idle_or_finished_session_without_pid_goes_stale_too() {
+    // A session nothing can watch must not sit on the shelf forever.
+    for event in ["SessionStart", "Stop"] {
+        let mut s = Store::default();
+        s.handle(&without_pid(claude(event, json!({}))), T0);
+        s.tick(T0 + 30 * MIN);
+        assert_eq!(only(&s).state, State::Stale, "{event}");
+        s.tick(T0 + 30 * MIN + 2 * 60 * MIN);
+        assert!(s.snapshot().sessions.is_empty(), "{event}");
+    }
+}
+
+#[test]
+fn a_waiting_question_without_pid_never_goes_stale() {
+    let mut s = Store::default();
+    s.handle(&without_pid(claude("PermissionRequest-Bash", json!({}))), T0);
+    s.tick(T0 + 5 * 60 * MIN);
+    assert_eq!(only(&s).state, State::NeedsInput);
+}
+
+#[test]
 fn stale_session_comes_back_on_any_event() {
     let mut s = Store::default();
     s.handle(&without_pid(claude("UserPromptSubmit", json!({}))), T0);

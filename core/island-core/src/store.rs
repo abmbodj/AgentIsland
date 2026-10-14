@@ -167,6 +167,12 @@ impl Terminal {
     }
 }
 
+/// Nothing tells us when this session goes away (no process or app-server connection to watch),
+/// so it goes stale after a quiet spell. A waiting question never does.
+fn unwatched(s: &Session) -> bool {
+    matches!(s.state, State::Working | State::Idle | State::Finished) && s.pid.is_none() && s.conn.is_none()
+}
+
 /// The Claude desktop app's end-of-turn "next step" box.
 const NEXT_STEP_TOOL: &str = "mcp__ccd_turn__wrap_up";
 
@@ -687,7 +693,7 @@ impl Store {
     /// Apply time-based transitions. Call at (or after) `next_deadline()`.
     pub fn tick(&mut self, now: Millis) {
         for s in &mut self.sessions {
-            if s.state == State::Working && s.pid.is_none() && now >= s.last_event + STALE_AFTER {
+            if unwatched(s) && now >= s.last_event + STALE_AFTER {
                 s.state = State::Stale;
                 s.since = s.last_event + STALE_AFTER;
             }
@@ -715,7 +721,7 @@ impl Store {
             match s.state {
                 State::Ended | State::Error => d.push(s.since + ENDED_GRACE),
                 State::Stale => d.push(s.since + STALE_DROP),
-                State::Working if s.pid.is_none() => d.push(s.last_event + STALE_AFTER),
+                _ if unwatched(s) => d.push(s.last_event + STALE_AFTER),
                 _ => {}
             }
             d.extend(s.subagents.iter().filter(|a| a.done).map(|a| a.since + SUBAGENT_FADE));
