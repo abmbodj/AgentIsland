@@ -36,6 +36,18 @@ fn claude_names_carry_their_version_and_any_cased_default_is_dropped() {
 }
 
 #[test]
+fn only_the_newest_model_of_each_claude_family_counts_as_latest() {
+    let v = read("claude-initialize.jsonl");
+    let models = parse_claude(&v["response"]["response"]);
+    let latest: Vec<(&str, bool)> = models.iter().map(|m| (m.id.as_str(), m.latest)).collect();
+    // Opus 5.5 beats the pinned Opus 4.6; Haiku 4.5 is the only Haiku listed, so it stays.
+    assert_eq!(latest, [("opus", true), ("fable", true), ("claude-haiku-4-5-20251001", true), ("claude-opus-4-6", false)]);
+    let v = read("claude-initialize-short-names.jsonl");
+    assert!(parse_claude(&v["response"]["response"]).iter().all(|m| m.latest));
+    assert!(parse_codex(&read("codex-models.json")).iter().all(|m| m.latest), "Codex already lists only what its own picker shows");
+}
+
+#[test]
 fn codex_models_keep_only_listed_ones_with_their_reasoning_levels() {
     let m = parse_codex(&read("codex-models.json"));
     let ids: Vec<&str> = m.iter().map(|m| m.id.as_str()).collect();
@@ -112,4 +124,35 @@ fn a_probe_that_never_answers_is_killed_at_the_timeout() {
     let err = fetch(&tools, "claude", Duration::from_millis(300)).unwrap_err();
     assert!(start.elapsed() < Duration::from_secs(5), "took {:?}", start.elapsed());
     assert!(err.contains("too long"), "{err}");
+}
+
+#[test]
+fn with_two_installs_the_newest_version_wins_whatever_the_search_order() {
+    let (old, old_root) = bin("old-cli", &[("claude", "echo '2.1.185 (Claude Code)'".to_string())]);
+    let (new, new_root) = bin("new-cli", &[("claude", "echo '2.1.299 (Claude Code)'".to_string())]);
+    let tools = Tools { dirs: [old.dirs, new.dirs].concat() };
+    assert_eq!(tools.find("claude"), Some(new_root.join("bin/claude")));
+    // A copy that can't report a version never beats one that can.
+    let (odd, _) = bin("odd-cli", &[("claude", "echo nonsense".to_string())]);
+    let tools = Tools { dirs: [odd.dirs, vec![old_root.join("bin")]].concat() };
+    assert_eq!(tools.find("claude"), Some(old_root.join("bin/claude")));
+}
+
+#[test]
+fn git_and_gh_keep_search_order_and_never_run_version() {
+    // Both copies would hang on --version; search order must answer without running either.
+    let (a, a_root) = bin("git-a", &[("git", "sleep 30".to_string())]);
+    let (b, _) = bin("git-b", &[("git", "sleep 30".to_string())]);
+    let start = Instant::now();
+    assert_eq!(Tools { dirs: [a.dirs, b.dirs].concat() }.find("git"), Some(a_root.join("bin/git")));
+    assert!(start.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn a_family_is_the_word_before_the_version() {
+    let v: Value = serde_json::json!({"models": [
+        {"value": "a", "displayName": "Claude Opus 5.5"}, {"value": "b", "displayName": "Claude Sonnet 5.5"},
+        {"value": "c", "displayName": "Claude Opus 4.6"}]});
+    let latest: Vec<bool> = parse_claude(&v).iter().map(|m| m.latest).collect();
+    assert_eq!(latest, [true, true, false]);
 }

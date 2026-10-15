@@ -20,6 +20,8 @@ pub struct ModelOption {
     pub auto: bool,
     /// Claude: the model supports fast mode.
     pub fast: bool,
+    /// The newest of its family ("Opus 5.5" over a pinned "Opus 4.6"); older ones go in a submenu.
+    pub latest: bool,
 }
 
 fn strings(v: &Value) -> Vec<String> {
@@ -37,7 +39,7 @@ fn claude_name(m: &Value, id: &str) -> String {
 /// Models from Claude Code's `initialize` control response, minus its own default entry
 /// (the composer has its own Default, which passes no flag).
 pub fn parse_claude(response: &Value) -> Vec<ModelOption> {
-    response["models"].as_array().into_iter().flatten()
+    let models = response["models"].as_array().into_iter().flatten()
         .filter_map(|m| {
             let id = m["value"].as_str().filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case("default"))?;
             Some(ModelOption {
@@ -46,9 +48,31 @@ pub fn parse_claude(response: &Value) -> Vec<ModelOption> {
                 efforts: strings(&m["supportedEffortLevels"]),
                 auto: m["supportsAutoMode"] == true,
                 fast: m["supportsFastMode"] == true,
+                latest: true,
             })
         })
-        .collect()
+        .collect();
+    mark_latest(models)
+}
+
+/// "Opus 5.5" -> ("Opus", [5, 5]): the family is the word before the version, so "Claude Opus 4.6" is still
+/// an Opus. A name without a version yields None and always counts as latest.
+fn family_version(name: &str) -> Option<(&str, Vec<u32>)> {
+    let words: Vec<&str> = name.split_whitespace().collect();
+    words.iter().enumerate().skip(1).find_map(|(i, w)| {
+        let v = w.split('.').map(|n| n.parse().ok()).collect::<Option<Vec<u32>>>()?;
+        Some((words[i - 1], v))
+    })
+}
+
+fn mark_latest(mut models: Vec<ModelOption>) -> Vec<ModelOption> {
+    let versions: Vec<_> = models.iter().map(|m| family_version(&m.name).map(|(f, v)| (f.to_string(), v))).collect();
+    for (i, m) in models.iter_mut().enumerate() {
+        if let Some((family, v)) = &versions[i] {
+            m.latest = !versions.iter().flatten().any(|(f, other)| f == family && other > v);
+        }
+    }
+    models
 }
 
 /// Models from `codex debug models` that Codex itself shows in its picker.
@@ -64,6 +88,8 @@ pub fn parse_codex(v: &Value) -> Vec<ModelOption> {
                     .filter_map(|l| l["effort"].as_str().map(str::to_string)).collect(),
                 auto: false,
                 fast: false,
+                // Codex lists only what its own picker shows.
+                latest: true,
             })
         })
         .collect()
