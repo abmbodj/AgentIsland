@@ -408,6 +408,7 @@ impl Chats {
                     return Err(format!("{} is no longer a folder.", chat.cwd));
                 }
                 let bin = tools.find(&chat.agent).ok_or_else(|| format!("Could not find {} on this Mac.", chat.agent))?;
+                let path = crate::pr::search_path(&bin);
                 let bin = std::fs::canonicalize(bin).map_err(|e| format!("Could not resolve the agent executable: {e}"))?;
                 use std::os::unix::fs::PermissionsExt;
                 if std::fs::metadata(&bin).map_err(|e| e.to_string())?.permissions().mode() & 0o111 == 0 {
@@ -415,7 +416,7 @@ impl Chats {
                 }
                 Ok(json!({"id": chat.id, "agent": chat.agent, "cwd": chat.cwd,
                     "sessionId": session, "target": g.handoff.as_ref().unwrap().target,
-                    "bin": bin, "path": crate::pr::search_path(&bin).to_string_lossy()}))
+                    "bin": bin, "path": path.to_string_lossy()}))
             })();
             match resolved {
                 Ok(claim) => {

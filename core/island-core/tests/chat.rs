@@ -183,7 +183,7 @@ fn handoff_waits_for_exit_and_is_claimed_once() {
     assert_eq!(claims[0]["sessionId"], "native-session");
     assert_eq!(claims[0]["cwd"], root.to_str().unwrap());
     assert_eq!(claims[0]["bin"], std::fs::canonicalize(root.join("bin/claude")).unwrap().to_str().unwrap());
-    assert!(claims[0]["path"].as_str().unwrap().contains(std::fs::canonicalize(root.join("bin")).unwrap().to_str().unwrap()));
+    assert!(claims[0]["path"].as_str().unwrap().contains(root.join("bin").to_str().unwrap()));
     assert_eq!(chats.claim_handoffs(&tools), serde_json::json!([]));
     assert!(chats.cancel_handoff(id).is_err());
     chats.finish_handoff(id, None).unwrap();
@@ -269,4 +269,26 @@ fn concurrent_claims_launch_a_chat_only_once() {
         let b = scope.spawn(|| chats.claim_handoffs(&tools).as_array().unwrap().len());
         assert_eq!(a.join().unwrap() + b.join().unwrap(), 1);
     });
+}
+
+#[test]
+fn handoff_preserves_the_discovered_symlink_directory_for_env_runtimes() {
+    let (tools, root) = fixture("handoff-symlink", &[("island-test-runtime", "exec /bin/sh \"$@\"")]);
+    let real = root.join("package/claude");
+    std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+    std::fs::write(&real, "#!/usr/bin/env island-test-runtime\necho '{\"type\":\"result\",\"session_id\":\"symlink-session\",\"is_error\":false}'\n").unwrap();
+    std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink(&real, root.join("bin/claude")).unwrap();
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "hello").unwrap();
+    assert_eq!(wait_for(&chats, id, "idle")["sessionId"], "symlink-session");
+    chats.request_handoff(id, "terminal").unwrap();
+    let claims = chats.claim_handoffs(&tools);
+    let claim = &claims[0];
+    let resumed = std::process::Command::new(claim["bin"].as_str().unwrap())
+        .args(["--resume", claim["sessionId"].as_str().unwrap()])
+        .env("PATH", claim["path"].as_str().unwrap())
+        .current_dir(claim["cwd"].as_str().unwrap()).output().unwrap();
+    assert!(resumed.status.success(), "{}", String::from_utf8_lossy(&resumed.stderr));
+    assert!(String::from_utf8_lossy(&resumed.stdout).contains("symlink-session"));
 }
