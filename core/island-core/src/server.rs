@@ -73,6 +73,7 @@ struct Inner {
 
 pub struct Core {
     inner: Arc<Inner>,
+    chats: crate::chat::Chats,
 }
 
 pub fn now_ms() -> Millis {
@@ -425,7 +426,7 @@ impl Core {
             }
         }).map_err(|e| e.to_string())?;
 
-        Ok(Core { inner })
+        Ok(Core { inner, chats: Default::default() })
     }
 
     /// Fire-and-forget commands from the UI: `{"type":"viewed","agent":..,"id":..}`, `{"type":"pause","paused":true}`.
@@ -480,6 +481,17 @@ impl Core {
                 crate::pr::cancel(req["cwd"].as_str().unwrap_or_default());
                 Ok(Value::Null)
             }
+            "chatStart" => {
+                let s = |k: &str| req[k].as_str().unwrap_or_default();
+                self.chats.start(&self.tools(), s("agent"), s("cwd"), s("text")).map(|id| json!({"id": id}))
+            }
+            "chatSend" => self.chats.send(&self.tools(), req["id"].as_u64().unwrap_or_default(), req["text"].as_str().unwrap_or_default()).map(|_| Value::Null),
+            "chatStop" => {
+                self.chats.stop(req["id"].as_u64().unwrap_or_default());
+                Ok(Value::Null)
+            }
+            "transcript" => self.chats.transcript(req["id"].as_u64().unwrap_or_default(), req["since"].as_u64().unwrap_or_default()),
+            "chatList" => Ok(self.chats.list()),
             "snapshot" => Ok(serde_json::from_str(&Inner::snapshot_json(&self.inner.lock())).unwrap_or(Value::Null)),
             op => Err(format!("unknown op {op}")),
         };
@@ -492,6 +504,7 @@ impl Core {
 
 impl Drop for Core {
     fn drop(&mut self) {
+        self.chats.kill_all();
         self.inner.stop.store(true, Ordering::SeqCst);
         let _ = UnixStream::connect(&self.inner.sock); // wake accept()
         let _ = std::fs::remove_file(&self.inner.sock);

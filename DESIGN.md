@@ -28,6 +28,10 @@ Flat. The whole island is opaque notch black (no glass, no blur, no shadow); hie
 
 Omitted until built (pill, session row, approval card, question card, handoff card, usage strip).
 
+### Chat (composer and conversation)
+
+The panel grows from 440 to 640 wide while a conversation is open and returns to the list on Back (⌘[, or Esc with an empty draft). The message column is 560 max and centered; the composer is pinned at the bottom. Your messages sit in a faint lifted block (white 8%); the agent's reply is plain text with no container. Tool calls are one compact collapsible row each. Code is a monospaced block with a Copy button. Errors and failed sessions use a triangle glyph and neutral text: amber stays "needs you" (a tool row waiting on approval) and green stays "finished", so neither appears in chat otherwise. Auto-scroll follows the stream until you scroll up; a "Latest" pill brings it back.
+
 ## 6. Do's and Don'ts
 
 - Do keep the collapsed pill unchanged when nothing needs the user (acceptance criterion 6).

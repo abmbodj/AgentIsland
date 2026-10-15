@@ -10,17 +10,21 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Where git, gh, claude and codex live: a GUI app doesn't get the shell's PATH.
+#[derive(Clone)]
 pub struct Tools {
     pub dirs: Vec<PathBuf>,
 }
 
 impl Tools {
+    /// `AGENT_ISLAND_TOOLS` (colon-separated dirs) is searched first, so tests and demos can stand in fake agents.
     pub fn standard(home: &Path) -> Self {
+        let extra = std::env::var("AGENT_ISLAND_TOOLS").unwrap_or_default();
+        let extra = extra.split(':').filter(|d| !d.is_empty()).map(PathBuf::from).collect::<Vec<_>>();
         let dirs = ["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from).into_iter();
-        Tools { dirs: dirs.chain([home.join(".local/bin"), PathBuf::from("/usr/bin")]).collect() }
+        Tools { dirs: extra.into_iter().chain(dirs).chain([home.join(".local/bin"), PathBuf::from("/usr/bin")]).collect() }
     }
 
-    fn find(&self, name: &str) -> Option<PathBuf> {
+    pub fn find(&self, name: &str) -> Option<PathBuf> {
         self.dirs.iter().map(|d| d.join(name)).find(|p| p.is_file())
     }
 }
@@ -60,7 +64,7 @@ fn cancelled(cwd: &str) -> bool {
 }
 
 /// A PATH for child processes (gh runs git and credential helpers): the tool's own dir, then the usual ones.
-fn search_path(bin: &Path) -> std::ffi::OsString {
+pub fn search_path(bin: &Path) -> std::ffi::OsString {
     let usual = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].map(PathBuf::from);
     std::env::join_paths(bin.parent().map(Path::to_path_buf).into_iter().chain(usual)).unwrap_or_default()
 }
