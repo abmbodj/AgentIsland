@@ -67,6 +67,28 @@ impl Settings {
         }
         a
     }
+
+    /// "Plan · Opus 5.5 · High · Fast": the non-default choices, for the transcript.
+    pub fn caption(&self) -> String {
+        let mode = self.mode.as_deref().map(|m| match m {
+            "plan" => "Plan",
+            "acceptEdits" => "Accept edits",
+            "auto" => "Auto",
+            "bypassPermissions" => "Bypass",
+            "read-only" => "Read-only",
+            "workspace-write" => "Workspace write",
+            "danger-full-access" => "Full access",
+            other => other,
+        }.to_string());
+        let model = self.name.clone().or_else(|| self.model.clone());
+        // ponytail: effort labels are duplicated in Swift's TurnLabels.effort; keep both in step.
+        let effort = self.effort.as_deref().map(|e| if e == "xhigh" { "Extra high".to_string() } else {
+            let mut c = e.chars();
+            c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+        });
+        let fast = self.fast.then(|| "Fast".to_string());
+        [mode, model, effort, fast].into_iter().flatten().collect::<Vec<_>>().join(" · ")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -80,6 +102,8 @@ pub struct Entry {
     pub input: String,
     pub output: String,
     pub status: &'static str,
+    /// User rows: the settings this turn ran with, when they changed (empty otherwise).
+    pub caption: String,
     pub rev: u64,
     #[serde(skip)]
     key: String,
@@ -87,7 +111,7 @@ pub struct Entry {
 
 impl Entry {
     fn new(kind: &'static str, text: &str) -> Self {
-        Entry { kind, text: text.into(), name: String::new(), input: String::new(), output: String::new(), status: "done", rev: 0, key: String::new() }
+        Entry { kind, text: text.into(), name: String::new(), input: String::new(), output: String::new(), status: "done", caption: String::new(), rev: 0, key: String::new() }
     }
 }
 
@@ -142,8 +166,10 @@ impl Transcript {
         self.entries.iter().position(|e| e.key == key)
     }
 
-    pub fn user(&mut self, text: &str) {
-        self.push(Entry::new("user", text));
+    pub fn user(&mut self, text: &str, caption: String) {
+        let mut e = Entry::new("user", text);
+        e.caption = caption;
+        self.push(e);
     }
 
     pub fn error(&mut self, text: &str) {
@@ -341,7 +367,7 @@ impl Chat {
         json!({
             "id": self.id, "agent": self.agent, "cwd": self.cwd, "title": self.title,
             "status": g.status.name(), "sessionId": g.transcript.session_id, "error": g.error,
-            "handoff": g.handoff, "handoffError": g.handoff_error,
+            "handoff": g.handoff, "handoffError": g.handoff_error, "settings": g.last,
         })
     }
 }
@@ -480,6 +506,7 @@ impl Chats {
                 }
                 Ok(json!({"id": chat.id, "agent": chat.agent, "cwd": chat.cwd,
                     "sessionId": session, "target": g.handoff.as_ref().unwrap().target,
+                    "args": g.last.clone().unwrap_or_default().args(&chat.agent),
                     "token": g.handoff.as_ref().unwrap().token,
                     "bin": bin, "path": path.to_string_lossy()}))
             })();
@@ -543,7 +570,7 @@ impl Chats {
         let g = chat.lock();
         Ok(json!({
             "status": g.status.name(), "error": g.error, "sessionId": g.transcript.session_id,
-            "handoff": g.handoff, "handoffError": g.handoff_error,
+            "handoff": g.handoff, "handoffError": g.handoff_error, "settings": g.last,
             "rev": g.transcript.rev, "entries": g.transcript.since(since),
         }))
     }
@@ -569,7 +596,8 @@ impl Chats {
                 return Err("The agent is still working.".into());
             }
             g.transcript.turn += 1;
-            g.transcript.user(text);
+            let caption = if g.last.as_ref() == Some(&settings) { String::new() } else { settings.caption() };
+            g.transcript.user(text, caption);
             g.last = Some(settings.clone());
             g.error = None;
             g.stopping = false;

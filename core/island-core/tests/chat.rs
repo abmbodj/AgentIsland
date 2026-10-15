@@ -429,3 +429,32 @@ fn settings_that_could_smuggle_flags_or_unknown_modes_are_refused() {
     assert!(chats.send(&tools, id, "x", s(None, None, Some("manual"), false)).is_err());
     assert_eq!(kinds(&chats.transcript(id, 0).unwrap()).iter().filter(|k| *k == "user").count(), 1, "a refused send adds no message");
 }
+
+#[test]
+fn a_caption_marks_the_first_turn_and_every_change_of_settings() {
+    let (tools, root) = fixture("caption", &[("claude", CLAUDE)]);
+    let chats = Chats::default();
+    let plan = Settings { name: Some("Opus 5.5".into()), ..s(Some("opus"), Some("xhigh"), Some("plan"), true) };
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "one", plan.clone()).unwrap();
+    wait_for(&chats, id, "idle");
+    chats.send(&tools, id, "two", plan).unwrap();
+    wait_for(&chats, id, "idle");
+    chats.send(&tools, id, "three", Settings::default()).unwrap();
+    let t = wait_for(&chats, id, "idle");
+    let captions: Vec<&str> = t["entries"].as_array().unwrap().iter()
+        .filter(|e| e["kind"] == "user").map(|e| e["caption"].as_str().unwrap()).collect();
+    assert_eq!(captions, ["Plan · Opus 5.5 · Extra high · Fast", "", ""], "same settings: no caption; back to all-Default: nothing to say");
+    assert_eq!(t["settings"]["mode"], Value::Null);
+    assert_eq!(chats.list()[0]["settings"]["fast"], false);
+}
+
+#[test]
+fn a_terminal_handoff_carries_the_chats_last_flags() {
+    let (tools, root) = fixture("handoff-flags", &[("claude", CLAUDE)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "one", s(Some("opus"), None, Some("plan"), false)).unwrap();
+    wait_for(&chats, id, "idle");
+    chats.request_handoff(id, "terminal").unwrap();
+    let claim = chats.claim_handoffs(&tools);
+    assert_eq!(claim[0]["args"], serde_json::json!(["--model", "opus", "--permission-mode", "plan"]));
+}
