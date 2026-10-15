@@ -5,16 +5,36 @@ use crate::pr::Tools;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 const OUTPUT_LIMIT: usize = 4_000;
 const STDERR_LIMIT: usize = 600;
 const CLAUDE_MODES: &[&str] = &["plan", "acceptEdits", "auto", "bypassPermissions"];
 const CODEX_MODES: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
+
+/// A pasted or uploaded image, base64 as the Messages API takes it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Image {
+    pub media_type: String,
+    pub data: String,
+}
+
+const IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
+const IMAGES_LIMIT: usize = 24_000_000;
+
+fn check_images(agent: &str, images: &[Image]) -> Result<(), String> {
+    if images.is_empty() { return Ok(()) }
+    // ponytail: codex exec takes images as -i files; only Claude gets pasted images for now.
+    if agent != "claude" { return Err("Images are only available for Claude.".into()) }
+    if images.iter().any(|i| !IMAGE_TYPES.contains(&i.media_type.as_str())) { return Err("Use a PNG, JPEG, GIF or WebP image.".into()) }
+    if images.iter().map(|i| i.data.len()).sum::<usize>() > IMAGES_LIMIT { return Err("Those images are too large.".into()) }
+    Ok(())
+}
 
 /// One turn's choices. None means Default: no flag, so the CLI's own config decides.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -112,6 +132,8 @@ pub struct Entry {
     pub status: &'static str,
     /// User rows: the settings this turn ran with, when they changed (empty otherwise).
     pub caption: String,
+    /// User rows: how many images went with the message.
+    pub images: usize,
     pub rev: u64,
     #[serde(skip)]
     key: String,
@@ -119,7 +141,7 @@ pub struct Entry {
 
 impl Entry {
     fn new(kind: &'static str, text: &str) -> Self {
-        Entry { kind, text: text.into(), name: String::new(), input: String::new(), output: String::new(), status: "done", caption: String::new(), rev: 0, key: String::new() }
+        Entry { kind, text: text.into(), name: String::new(), input: String::new(), output: String::new(), status: "done", caption: String::new(), images: 0, rev: 0, key: String::new() }
     }
 }
 
@@ -174,9 +196,10 @@ impl Transcript {
         self.entries.iter().position(|e| e.key == key)
     }
 
-    pub fn user(&mut self, text: &str, caption: String) {
+    pub fn user(&mut self, text: &str, caption: String, images: usize) {
         let mut e = Entry::new("user", text);
         e.caption = caption;
+        e.images = images;
         self.push(e);
     }
 
@@ -355,6 +378,36 @@ struct State {
     handoff_error: Option<String>,
     handoff_token: u64,
     last: Option<Settings>,
+    /// Claude's open stdin, for answers to its permission requests; closed once the turn's result arrives.
+    stdin: Option<ChildStdin>,
+    /// An AskUserQuestion waiting for the user.
+    question: Option<Question>,
+}
+
+struct Question {
+    request_id: String,
+    input: Value,
+}
+
+/// Answer one of Claude's `control_request`s; a no-op once the turn's stdin is closed.
+fn reply(g: &mut State, request_id: &str, body: Value) {
+    if let Some(w) = g.stdin.as_mut() {
+        let line = json!({"type": "control_response", "response": {"subtype": "success", "request_id": request_id, "response": body}});
+        let _ = writeln!(w, "{line}");
+    }
+}
+
+/// A tool permission request: AskUserQuestion waits for the user, anything else is denied
+/// (the island has no approval UI; the permission mode decides what runs unasked).
+fn control(g: &mut State, v: &Value) {
+    let r = &v["request"];
+    if r["subtype"] != "can_use_tool" { return }
+    let id = v["request_id"].as_str().unwrap_or_default();
+    if r["tool_name"] == "AskUserQuestion" {
+        g.question = Some(Question { request_id: id.into(), input: r["input"].clone() });
+    } else {
+        reply(g, id, json!({"behavior": "deny", "message": "This chat can't ask for tool permission. Ask the user to pick a more permissive mode."}));
+    }
 }
 
 pub struct Chat {
@@ -391,12 +444,12 @@ fn command(tools: &Tools, agent: &str, cwd: &str, prompt: &str, session: Option<
     let mut c = Command::new(&bin);
     match agent {
         "claude" => {
-            c.args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]);
+            // The prompt goes in on stdin (it can carry images); stdio permission prompts are what let AskUserQuestion reach us.
+            c.args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-prompt-tool", "stdio"]);
             c.args(settings.args(agent));
             if let Some(s) = session {
                 c.args(["--resume", s]);
             }
-            c.args(["--", prompt]);
         }
         "codex" => {
             c.args(["exec", "--json", "--skip-git-repo-check"]);
@@ -408,16 +461,17 @@ fn command(tools: &Tools, agent: &str, cwd: &str, prompt: &str, session: Option<
         }
         other => return Err(format!("Unknown agent {other}")),
     }
-    c.current_dir(cwd).env("PATH", crate::pr::search_path(&bin)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
+    c.current_dir(cwd).env("PATH", crate::pr::search_path(&bin)).stdin(if agent == "claude" { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     Ok(c)
 }
 
 impl Chats {
-    pub fn start(&self, tools: &Tools, agent: &str, cwd: &str, text: &str, settings: Settings) -> Result<u64, String> {
-        if text.trim().is_empty() {
+    pub fn start(&self, tools: &Tools, agent: &str, cwd: &str, text: &str, images: Vec<Image>, settings: Settings) -> Result<u64, String> {
+        if text.trim().is_empty() && images.is_empty() {
             return Err("Write a message first.".into());
         }
         settings.validate(agent)?;
+        check_images(agent, &images)?;
         if !std::path::Path::new(cwd).is_dir() {
             return Err(format!("{cwd} is not a folder."));
         }
@@ -432,10 +486,10 @@ impl Chats {
             agent: agent.into(),
             cwd: cwd.into(),
             title,
-            state: Mutex::new(State { transcript: Transcript::default(), status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None, handoff_token: 0, last: None }),
+            state: Mutex::new(State { transcript: Transcript::default(), status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None, handoff_token: 0, last: None, stdin: None, question: None }),
         });
         self.list.lock().unwrap_or_else(|e| e.into_inner()).insert(id, chat.clone());
-        Self::turn(tools, &chat, text, settings)?;
+        Self::turn(tools, &chat, text, images, settings)?;
         Ok(id)
     }
 
@@ -443,13 +497,31 @@ impl Chats {
         self.list.lock().unwrap_or_else(|e| e.into_inner()).get(&id).cloned().ok_or_else(|| "That chat no longer exists.".into())
     }
 
-    pub fn send(&self, tools: &Tools, id: u64, text: &str, settings: Settings) -> Result<(), String> {
+    pub fn send(&self, tools: &Tools, id: u64, text: &str, images: Vec<Image>, settings: Settings) -> Result<(), String> {
         let chat = self.get(id)?;
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && images.is_empty() {
             return Err("Write a message first.".into());
         }
         settings.validate(&chat.agent)?;
-        Self::turn(tools, &chat, text, settings)
+        check_images(&chat.agent, &images)?;
+        Self::turn(tools, &chat, text, images, settings)
+    }
+
+    /// Answer the open AskUserQuestion (`answers` maps each question to its chosen label), or decline with None.
+    pub fn answer(&self, id: u64, answers: Option<Value>) -> Result<(), String> {
+        let chat = self.get(id)?;
+        let mut g = chat.lock();
+        let q = g.question.take().ok_or("No question is waiting.")?;
+        let body = match answers {
+            Some(a) => {
+                let mut input = q.input;
+                input["answers"] = a;
+                json!({"behavior": "allow", "updatedInput": input})
+            }
+            None => json!({"behavior": "deny", "message": "The user chose not to answer."}),
+        };
+        reply(&mut g, &q.request_id, body);
+        Ok(())
     }
 
     pub fn request_handoff(&self, id: u64, target: &str) -> Result<(), String> {
@@ -579,6 +651,7 @@ impl Chats {
         Ok(json!({
             "status": g.status.name(), "error": g.error, "sessionId": g.transcript.session_id,
             "handoff": g.handoff, "handoffError": g.handoff_error, "settings": g.last,
+            "question": g.question.as_ref().map(|q| &q.input),
             "rev": g.transcript.rev, "entries": g.transcript.since(since),
         }))
     }
@@ -594,7 +667,7 @@ impl Chats {
         ids.into_iter().for_each(|id| self.stop(id));
     }
 
-    fn turn(tools: &Tools, chat: &Arc<Chat>, text: &str, settings: Settings) -> Result<(), String> {
+    fn turn(tools: &Tools, chat: &Arc<Chat>, text: &str, images: Vec<Image>, settings: Settings) -> Result<(), String> {
         let session = {
             let mut g = chat.lock();
             if g.handoff.is_some() {
@@ -610,7 +683,7 @@ impl Chats {
                 (Some(_), c) if c.is_empty() => "Default".to_string(),
                 (_, c) => c,
             };
-            g.transcript.user(text, caption);
+            g.transcript.user(text, caption, images.len());
             g.last = Some(settings.clone());
             g.error = None;
             g.stopping = false;
@@ -630,8 +703,16 @@ impl Chats {
             }
         }
         let (out, mut err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
-        let chat = chat.clone();
+        let mut stdin = child.stdin.take();
+        let (chat, text) = (chat.clone(), text.to_string());
         std::thread::spawn(move || {
+            if let Some(w) = stdin.as_mut() {
+                let mut content: Vec<Value> = images.iter().map(|i| json!({"type": "image", "source": {"type": "base64", "media_type": i.media_type, "data": i.data}})).collect();
+                if !text.trim().is_empty() { content.push(json!({"type": "text", "text": text})) }
+                let line = json!({"type": "user", "message": {"role": "user", "content": content}});
+                let _ = writeln!(w, "{line}").and_then(|_| w.flush());
+            }
+            chat.lock().stdin = stdin;
             let stderr = std::thread::spawn(move || {
                 let mut s = String::new();
                 let _ = err.by_ref().take(64_000).read_to_string(&mut s);
@@ -642,12 +723,19 @@ impl Chats {
             for line in BufReader::new(out).lines().map_while(Result::ok) {
                 let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
                 let mut g = chat.lock();
+                if v["type"] == "control_request" {
+                    control(&mut g, &v);
+                    continue;
+                }
                 finished |= if chat.agent == "claude" { g.transcript.apply_claude(&v) } else { g.transcript.apply_codex(&v) };
+                if finished { g.stdin = None } // closing stdin lets `claude -p` exit
             }
             let code = child.wait().ok().and_then(|s| s.code());
             let stderr = stderr.join().unwrap_or_default();
             let mut g = chat.lock();
             g.pid = None;
+            g.stdin = None;
+            g.question = None;
             if g.stopping {
                 g.transcript.notice("Stopped");
                 g.status = Status::Idle;

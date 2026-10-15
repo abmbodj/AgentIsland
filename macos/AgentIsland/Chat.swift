@@ -29,7 +29,59 @@ struct ChatEntry: Decodable, Equatable, Identifiable {
     var status: String
     /// What changed since the last turn, e.g. "Opus 5.5 · High"; empty when nothing did.
     var caption: String
+    /// User rows: how many images went with the message.
+    var images: Int
     var id: Int { index }
+}
+
+/// An AskUserQuestion the agent is waiting on (the tool's own input shape).
+struct ChatQuestionSet: Decodable, Equatable {
+    struct Option: Decodable, Equatable { var label: String; var description: String? }
+    struct Item: Decodable, Equatable {
+        var question: String
+        var header: String?
+        var multiSelect: Bool?
+        var options: [Option]
+    }
+    var questions: [Item]
+}
+
+/// A pasted or uploaded image, already shrunk and encoded for the agent.
+struct ChatImage: Identifiable, Equatable {
+    let id = UUID()
+    let thumb: NSImage
+    let mediaType = "image/png"
+    let data: String
+
+    static let limit = 5
+    private static let maxSide: CGFloat = 1568
+
+    /// Decode any image data, shrink its longest side to what the model reads, and re-encode as PNG.
+    static func make(_ raw: Data) -> ChatImage? {
+        guard let src = NSBitmapImageRep(data: raw) else { return nil }
+        var w = CGFloat(src.pixelsWide), h = CGFloat(src.pixelsHigh)
+        let k = min(1, maxSide / max(w, h))
+        w = max(1, (w * k).rounded()); h = max(1, (h * k).rounded())
+        guard let ctx = CGContext(data: nil, width: Int(w), height: Int(h), bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let cg = src.cgImage else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let out = ctx.makeImage(),
+              let png = NSBitmapImageRep(cgImage: out).representation(using: .png, properties: [:]) else { return nil }
+        return ChatImage(thumb: NSImage(cgImage: out, size: NSSize(width: w, height: h)), data: png.base64EncodedString())
+    }
+
+    /// Images on a pasteboard: image files copied in Finder, else raw image data (a screenshot).
+    static func from(_ pb: NSPasteboard) -> [ChatImage] {
+        let urls = (pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        let files = urls.compactMap { try? Data(contentsOf: $0) }.compactMap(make)
+        if !files.isEmpty { return files }
+        // A text copy from a word processor can carry a TIFF preview; only an image-only pasteboard is an image.
+        guard pb.string(forType: .string) == nil else { return [] }
+        let raw = pb.data(forType: .png) ?? pb.data(forType: .tiff)
+        return raw.flatMap(make).map { [$0] } ?? []
+    }
 }
 
 struct ChatTranscript: Decodable {
@@ -40,6 +92,7 @@ struct ChatTranscript: Decodable {
     var entries: [ChatEntry]
     var handoff: ChatHandoff?
     var handoffError: String?
+    var question: ChatQuestionSet?
 }
 
 /// One turn's choices; nil is Default (no flag, the CLI's own config). Mirrors chat.rs `Settings`.
@@ -316,6 +369,9 @@ extension PanelModel {
             disconnected = false
             composeError = nil
             replySettings = nil
+            chatQuestion = nil
+            questionPicks = [:]
+            images = []
             loadOptions(refresh: true)
             chat = c
             pollChat()
@@ -328,6 +384,8 @@ extension PanelModel {
         let change = { [self] in
             chat = nil
             replySettings = nil
+            chatQuestion = nil
+            images = []
             entries = []
             composeError = nil
             composing = false
@@ -367,14 +425,15 @@ extension PanelModel {
     /// Start a new chat from the composer.
     func startChat() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty || !images.isEmpty else { return }
         withFolderAccess(composerDir) { [self] in beginChat(text) }
     }
 
     private func beginChat(_ text: String) {
         do {
-            let r = try CoreBridge.shared.call(["op": "chatStart", "agent": composerAgent, "cwd": composerDir, "text": text, "settings": settings(reply: false).dict], as: ChatStarted.self)
+            let r = try CoreBridge.shared.call(["op": "chatStart", "agent": composerAgent, "cwd": composerDir, "text": text, "images": imagePayload, "settings": settings(reply: false).dict], as: ChatStarted.self)
             draft = ""
+            images = []
             composeError = nil
             refreshChats()
             if let c = chats.first(where: { $0.id == r.id }) { openChat(c) }
@@ -386,16 +445,50 @@ extension PanelModel {
     /// Send the next turn in the open chat.
     func sendChat() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let c = chat, c.handoff == nil, !text.isEmpty, chatStatus != "running" else { return }
+        guard let c = chat, c.handoff == nil, !text.isEmpty || !images.isEmpty, chatStatus != "running" else { return }
         withFolderAccess(c.cwd) { [self] in
             do {
-                _ = try CoreBridge.shared.call(["op": "chatSend", "id": c.id, "text": text, "settings": settings(reply: true).dict])
+                _ = try CoreBridge.shared.call(["op": "chatSend", "id": c.id, "text": text, "images": imagePayload, "settings": settings(reply: true).dict])
                 draft = ""
+                images = []
                 chatStatus = "running"
                 pollChat()
             } catch {
                 composeError = error.localizedDescription
             }
+        }
+    }
+
+    var imagePayload: [[String: String]] { images.map { ["mediaType": $0.mediaType, "data": $0.data] } }
+
+    func attach(_ new: [ChatImage]) {
+        images = Array((images + new).prefix(ChatImage.limit))
+    }
+
+    func attachFiles(_ urls: [URL]) {
+        attach(urls.compactMap { try? Data(contentsOf: $0) }.compactMap(ChatImage.make))
+    }
+
+    func chooseImages() {
+        let p = NSOpenPanel()
+        p.allowedContentTypes = [.image]
+        p.allowsMultipleSelection = true
+        p.prompt = "Attach"
+        NSApp.activate(ignoringOtherApps: true)
+        if p.runModal() == .OK { attachFiles(p.urls) }
+    }
+
+    /// Answer the agent's open question (`nil` declines it).
+    func answerChat(_ answers: [String: String]?) {
+        guard let c = chat else { return }
+        var req: [String: Any] = ["op": "chatAnswer", "id": c.id]
+        if let answers { req["answers"] = answers }
+        do {
+            _ = try CoreBridge.shared.call(req)
+            chatQuestion = nil
+            questionPicks = [:]
+        } catch {
+            composeError = error.localizedDescription
         }
     }
 
@@ -459,6 +552,7 @@ extension PanelModel {
             if chat?.sessionId != t.sessionId { chat?.sessionId = t.sessionId }
             if chat?.handoff != t.handoff { chat?.handoff = t.handoff }
             if chat?.handoffError != t.handoffError { chat?.handoffError = t.handoffError }
+            if chatQuestion != t.question { chatQuestion = t.question; questionPicks = [:] }
         } catch {
             disconnected = true
         }

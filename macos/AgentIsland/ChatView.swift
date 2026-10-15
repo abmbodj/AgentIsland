@@ -14,7 +14,23 @@ private var easing: Animation? { Motion.quick }
 final class ComposerTextView: NSTextView {
     var onSend: () -> Void = {}
     var onFocus: () -> Void = {}
+    var onPasteImages: ([ChatImage]) -> Void = { _ in }
     var placeholder = ""
+
+    /// Pasting an image (a screenshot, or image files copied in Finder) attaches it instead of typing.
+    override func paste(_ sender: Any?) {
+        let images = ChatImage.from(.general)
+        if images.isEmpty { super.paste(sender) } else { onPasteImages(images) }
+    }
+
+    // The island has no Edit menu, so ⌘V never reaches `paste:` unless the field takes it itself.
+    override func performKeyEquivalent(with e: NSEvent) -> Bool {
+        if window?.firstResponder === self, e.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command, e.charactersIgnoringModifiers == "v" {
+            paste(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: e)
+    }
 
     override func keyDown(with e: NSEvent) {
         if (e.keyCode == 36 || e.keyCode == 76), !e.modifierFlags.contains(.shift), !hasMarkedText() {
@@ -44,6 +60,7 @@ struct ComposerField: NSViewRepresentable {
     var focusTick: Int
     var onSend: () -> Void
     var onFocus: () -> Void
+    var onPasteImages: ([ChatImage]) -> Void
     static let maxHeight: CGFloat = 120
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -89,6 +106,7 @@ struct ComposerField: NSViewRepresentable {
         context.coordinator.parent = self
         tv.onSend = onSend
         tv.onFocus = onFocus
+        tv.onPasteImages = onPasteImages
         if tv.placeholder != placeholder { tv.placeholder = placeholder; tv.needsDisplay = true }
         if tv.string != text { tv.string = text; tv.needsDisplay = true }
         if focusTick != context.coordinator.lastTick {
@@ -114,7 +132,7 @@ struct Composer: View {
     @State private var focusTick = 0
 
     private var running: Bool { mode == .reply && model.chatStatus == "running" }
-    private var blank: Bool { model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var blank: Bool { model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.images.isEmpty }
 
     private func submit() {
         if mode == .new { model.startChat() } else { model.sendChat() }
@@ -129,7 +147,20 @@ struct Composer: View {
                     .padding(.horizontal, 4)
                     .accessibilityLabel("Error: \(e)")
             }
+            if !model.images.isEmpty { attachments }
             HStack(alignment: .bottom, spacing: 8) {
+                Button { model.chooseImages() } label: {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(secondary)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 2)
+                .padding(.leading, -6)
+                .accessibilityLabel("Attach images")
+                .help("Attach images, or paste or drop them")
                 ComposerField(
                     text: $model.draft,
                     placeholder: mode == .new ? "Start a new session…" : (running ? "Draft your next message…" : "Reply…"),
@@ -138,7 +169,8 @@ struct Composer: View {
                     onFocus: {
                         if mode == .new { model.composing = true } // typing here: don't let the screen change underneath
                         model.onSummon()
-                    }
+                    },
+                    onPasteImages: { model.attach($0) }
                 )
                 .frame(maxWidth: .infinity)
                 Button {
@@ -164,11 +196,39 @@ struct Composer: View {
             .padding(.trailing, 6)
             .padding(.vertical, 3)
             .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.07)))
+            .dropDestination(for: URL.self) { urls, _ in model.attachFiles(urls); return !urls.isEmpty }
             options
         }
         .onAppear {
             model.loadOptions(refresh: true)
             if model.summoned { focusTick += 1 }
+        }
+    }
+
+    private var attachments: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(model.images) { img in
+                    Image(nsImage: img.thumb)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 44, height: 44)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(alignment: .topTrailing) {
+                            Button { model.images.removeAll { $0.id == img.id } } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(ink, Color(white: 0.2))
+                            }
+                            .buttonStyle(.plain)
+                            .offset(x: 5, y: -5)
+                            .accessibilityLabel("Remove image")
+                        }
+                        .padding(.top, 5).padding(.trailing, 5)
+                        .accessibilityLabel("Attached image")
+                }
+            }
+            .padding(.horizontal, 4)
         }
     }
 
@@ -497,7 +557,9 @@ struct ChatView: View {
                     ForEach(model.entries) { e in
                         EntryView(entry: e, needsApproval: needsApproval).transition(.rise)
                     }
-                    if model.chatStatus == "running" && !model.disconnected {
+                    if let q = model.chatQuestion {
+                        QuestionCard(model: model, questions: q).transition(.rise)
+                    } else if model.chatStatus == "running" && !model.disconnected {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.mini)
                             Text("Working").font(.system(size: 12)).foregroundStyle(secondary)
@@ -591,6 +653,89 @@ struct ChatView: View {
     }
 }
 
+/// The agent's AskUserQuestion: pick an option per question. One single-choice question answers on tap;
+/// anything more asks for Submit. Skip declines, and the agent carries on without an answer.
+private struct QuestionCard: View {
+    @ObservedObject var model: PanelModel
+    let questions: ChatQuestionSet
+
+    private var immediate: Bool { questions.questions.count == 1 && questions.questions[0].multiSelect != true }
+    private var ready: Bool { questions.questions.allSatisfy { !(model.questionPicks[$0.question] ?? []).isEmpty } }
+
+    private func pick(_ q: ChatQuestionSet.Item, _ label: String) {
+        if immediate { model.answerChat([q.question: label]); return }
+        var s = model.questionPicks[q.question] ?? []
+        if q.multiSelect == true {
+            if !s.insert(label).inserted { s.remove(label) }
+        } else {
+            s = [label]
+        }
+        model.questionPicks[q.question] = s
+    }
+
+    private func submit() {
+        // Keep the options' order, as a multi-select answer reads best in the order it was offered.
+        model.answerChat(Dictionary(uniqueKeysWithValues: questions.questions.map { q in
+            (q.question, q.options.map(\.label).filter { (model.questionPicks[q.question] ?? []).contains($0) }.joined(separator: ", "))
+        }))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(questions.questions, id: \.question) { q in
+                VStack(alignment: .leading, spacing: 6) {
+                    if let h = q.header, !h.isEmpty {
+                        Text(h.uppercased()).font(.system(size: 10, weight: .semibold)).foregroundStyle(muted)
+                    }
+                    Text(q.question).font(.system(size: 13, weight: .semibold)).foregroundStyle(ink).fixedSize(horizontal: false, vertical: true)
+                    ForEach(q.options, id: \.label) { o in
+                        let on = (model.questionPicks[q.question] ?? []).contains(o.label)
+                        Button { pick(q, o.label) } label: {
+                            HStack(alignment: .top, spacing: 8) {
+                                if !immediate {
+                                    Image(systemName: q.multiSelect == true ? (on ? "checkmark.square.fill" : "square") : (on ? "largecircle.fill.circle" : "circle"))
+                                        .font(.system(size: 12)).foregroundStyle(on ? ink : muted)
+                                }
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(o.label).font(.system(size: 12, weight: .medium)).foregroundStyle(ink)
+                                    if let d = o.description, !d.isEmpty {
+                                        Text(d).font(.system(size: 11)).foregroundStyle(secondary).fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 10).padding(.vertical, 7)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(on ? 0.14 : 0.07)))
+                            .contentShape(RoundedRectangle(cornerRadius: 8))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(on ? .isSelected : [])
+                    }
+                }
+            }
+            HStack(spacing: 8) {
+                if !immediate {
+                    Button("Submit", action: submit)
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(ready ? Color.black : muted)
+                        .padding(.horizontal, 12).frame(height: 24)
+                        .background(Capsule().fill(ready ? ink : Color.white.opacity(0.1)))
+                        .disabled(!ready)
+                }
+                Button("Skip") { model.answerChat(nil) }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12)).foregroundStyle(secondary)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.1)))
+        .accessibilityElement(children: .contain)
+    }
+}
+
 private struct BannerButton: View {
     let title: String
     let action: () -> Void
@@ -640,13 +785,21 @@ private struct EntryView: View {
             HStack {
                 Spacer(minLength: 56)
                 VStack(alignment: .trailing, spacing: 3) {
-                    Text(entry.text)
-                        .font(.system(size: 13))
-                        .foregroundStyle(ink)
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08)))
+                    if entry.images > 0 {
+                        Label(entry.images == 1 ? "1 image" : "\(entry.images) images", systemImage: "photo")
+                            .font(.system(size: 11)).foregroundStyle(secondary)
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08)))
+                    }
+                    if !entry.text.isEmpty {
+                        Text(entry.text)
+                            .font(.system(size: 13))
+                            .foregroundStyle(ink)
+                            .textSelection(.enabled)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08)))
+                    }
                     if !entry.caption.isEmpty {
                         Text(entry.caption).font(.system(size: 10)).foregroundStyle(muted).padding(.trailing, 4)
                     }
