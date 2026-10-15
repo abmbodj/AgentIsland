@@ -247,6 +247,8 @@ final class IslandController {
     /// A chat made here shows its own questions in the conversation, so they get no card and don't open the island.
     private func withoutChatQuestions(_ raw: Snapshot) -> Snapshot {
         var snap = raw
+        // Chats are only polled while the island is open, so a chat started since may not be linked to its session yet.
+        if !model.chats.isEmpty, snap.sessions.contains(where: { s in s.pending.contains { $0.kind == "question" } && model.chatFor(s) == nil }) { model.refreshChats() }
         for i in snap.sessions.indices where model.chatFor(snap.sessions[i]) != nil {
             let mine = snap.sessions[i].pending.filter { $0.kind == "question" && (!$0.held || $0.releasable) }
             guard !mine.isEmpty else { continue }
