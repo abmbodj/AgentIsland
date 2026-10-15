@@ -14,6 +14,7 @@ struct ChatInfo: Decodable, Equatable, Identifiable {
     var error: String?
     var handoff: ChatHandoff?
     var handoffError: String?
+    var settings: TurnSettings?
 }
 
 struct ChatEntry: Decodable, Equatable, Identifiable {
@@ -26,6 +27,8 @@ struct ChatEntry: Decodable, Equatable, Identifiable {
     var output: String
     /// Tool rows: "running" | "done" | "error"
     var status: String
+    /// What changed since the last turn, e.g. "Opus 5.5 · High"; empty when nothing did.
+    var caption: String
     var id: Int { index }
 }
 
@@ -37,6 +40,103 @@ struct ChatTranscript: Decodable {
     var entries: [ChatEntry]
     var handoff: ChatHandoff?
     var handoffError: String?
+}
+
+/// One turn's choices; nil is Default (no flag, the CLI's own config). Mirrors chat.rs `Settings`.
+struct TurnSettings: Codable, Equatable {
+    var model: String?
+    var effort: String?
+    /// Claude permission mode or Codex sandbox; Codex treats nil as workspace-write.
+    var mode: String?
+    var fast = false
+    /// The model's display name, for chips and captions.
+    var name: String?
+
+    var dict: [String: Any] {
+        (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(self))) as? [String: Any] ?? [:]
+    }
+}
+
+struct ModelOption: Decodable, Equatable, Identifiable {
+    var id: String
+    var name: String
+    var efforts: [String]
+    var auto: Bool
+    var fast: Bool
+}
+
+struct AgentOptions: Decodable, Equatable {
+    var models: [ModelOption]
+    var error: String?
+    var loading: Bool
+}
+
+enum TurnLabels {
+    /// The modes the island offers; Claude's list starts with Default (empty id).
+    static func modes(_ agent: String) -> [(id: String, name: String)] {
+        agent == "codex"
+            ? [("read-only", "Read-only"), ("workspace-write", "Workspace write"), ("danger-full-access", "Full access")]
+            : [("", "Default"), ("plan", "Plan"), ("acceptEdits", "Accept edits"), ("auto", "Auto"), ("bypassPermissions", "Bypass")]
+    }
+
+    // ponytail: mirrors Settings::caption in chat.rs; keep both in step.
+    static func effort(_ e: String) -> String { e == "xhigh" ? "Extra high" : e.prefix(1).uppercased() + e.dropFirst() }
+
+    static func dangerous(_ mode: String?) -> Bool { mode == "bypassPermissions" || mode == "danger-full-access" }
+
+    /// Effort levels, lowest first, so snapping can step down.
+    static let order = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+    static func rank(_ e: String) -> Int { order.firstIndex(of: e) ?? order.count }
+}
+
+extension TurnSettings {
+    /// Levels the chosen model accepts. With Default model the island can't know which model the
+    /// config picks, so it offers every level the CLI's models know.
+    // ponytail: a Default model with a level its configured model lacks fails that turn with the CLI's own error.
+    func effortLevels(in options: AgentOptions?) -> [String] {
+        let models = options?.models ?? []
+        if let id = model, let m = models.first(where: { $0.id == id }) { return m.efforts }
+        return Array(Set(models.flatMap(\.efforts))).sorted { TurnLabels.rank($0) < TurnLabels.rank($1) }
+    }
+
+    /// Fit these choices to what the CLI lists: an unlisted model goes back to Default, effort snaps
+    /// down to the highest supported level, and Auto or Fast drop when the model lacks them.
+    /// An empty list (still loading, or the CLI failed) keeps the choices as they are.
+    func fitted(to options: AgentOptions?, agent: String) -> TurnSettings {
+        guard let options, !options.models.isEmpty else { return self }
+        var s = self
+        let m = s.model.flatMap { id in options.models.first { $0.id == id } }
+        if m == nil { s.model = nil }
+        s.name = m?.name
+        let levels = s.effortLevels(in: options)
+        if let e = s.effort, !levels.contains(e) {
+            s.effort = levels.last { TurnLabels.rank($0) < TurnLabels.rank(e) }
+        }
+        if agent == "claude" {
+            if s.mode == "auto", let m, !m.auto { s.mode = nil }
+            if s.fast, !(m?.fast ?? false) { s.fast = false }
+        } else {
+            s.fast = false
+        }
+        return s
+    }
+
+    #if DEBUG
+    /// Assert-based check of the fitting rules; runs once at launch in Debug builds.
+    static func selfCheck() {
+        let opts = AgentOptions(models: [
+            ModelOption(id: "opus", name: "Opus 5.5", efforts: ["low", "medium", "high", "xhigh", "max"], auto: true, fast: true),
+            ModelOption(id: "old", name: "Opus 4.6", efforts: ["low", "medium", "high", "max"], auto: false, fast: false),
+        ], error: nil, loading: false)
+        var s = TurnSettings(model: "old", effort: "xhigh", mode: "auto", fast: true)
+        s = s.fitted(to: opts, agent: "claude")
+        assert(s.effort == "high" && s.mode == nil && !s.fast && s.name == "Opus 4.6", "snap down, drop auto and fast")
+        assert(TurnSettings(model: "gone").fitted(to: opts, agent: "claude").model == nil, "unlisted model goes to Default")
+        let loading = AgentOptions(models: [], error: nil, loading: true)
+        assert(TurnSettings(model: "gone").fitted(to: loading, agent: "claude").model == "gone", "an empty list keeps choices")
+        assert(TurnSettings(fast: true).fitted(to: opts, agent: "codex").fast == false, "fast never reaches Codex")
+    }
+    #endif
 }
 
 /// A reply split into prose and fenced code, so code gets a monospaced block with a Copy button.
@@ -109,6 +209,7 @@ extension PanelModel {
 
     func openCompose() {
         navigate(forward: true) { [self] in
+            loadOptions(refresh: true)
             composeError = nil
             composing = true
         }
@@ -141,6 +242,37 @@ extension PanelModel {
         return d == NSHomeDirectory() ? "~" : (d as NSString).lastPathComponent
     }
 
+    private func remembered(_ agent: String) -> TurnSettings {
+        guard let d = UserDefaults.standard.data(forKey: "composerSettings.\(agent)"),
+              let s = try? JSONDecoder().decode(TurnSettings.self, from: d) else { return TurnSettings() }
+        return s
+    }
+
+    /// The choices for the new-chat composer, or for the open chat's next turn.
+    func settings(reply: Bool) -> TurnSettings {
+        let agent = reply ? (chat?.agent ?? composerAgent) : composerAgent
+        let s = reply ? (replySettings ?? chat?.settings ?? remembered(agent)) : remembered(agent)
+        return s.fitted(to: options[agent], agent: agent)
+    }
+
+    /// A change in either composer is also remembered as that agent's choice for new chats.
+    func setSettings(_ s: TurnSettings, reply: Bool) {
+        let agent = reply ? (chat?.agent ?? composerAgent) : composerAgent
+        let f = s.fitted(to: options[agent], agent: agent)
+        if let d = try? JSONEncoder().encode(f) { UserDefaults.standard.set(d, forKey: "composerSettings.\(agent)") }
+        if reply { replySettings = f }
+        objectWillChange.send()
+    }
+
+    /// Pull the model menus; the core refetches in the background when asked and an hour has passed.
+    func loadOptions(refresh: Bool) {
+        guard let o = try? CoreBridge.shared.call(["op": "chatOptions", "refresh": refresh], as: [String: AgentOptions].self) else { return }
+        if o != options { options = o }
+        if o.values.contains(where: \.loading) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.loadOptions(refresh: false) }
+        }
+    }
+
     func chooseComposerDir() {
         let p = NSOpenPanel()
         p.canChooseDirectories = true
@@ -170,6 +302,8 @@ extension PanelModel {
             chatError = nil
             disconnected = false
             composeError = nil
+            replySettings = nil
+            loadOptions(refresh: true)
             chat = c
             pollChat()
             startPolling()
@@ -180,6 +314,7 @@ extension PanelModel {
     func closeChat(animated: Bool = true) {
         let change = { [self] in
             chat = nil
+            replySettings = nil
             entries = []
             composeError = nil
             composing = false
@@ -195,7 +330,7 @@ extension PanelModel {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         do {
-            let r = try CoreBridge.shared.call(["op": "chatStart", "agent": composerAgent, "cwd": composerDir, "text": text], as: ChatStarted.self)
+            let r = try CoreBridge.shared.call(["op": "chatStart", "agent": composerAgent, "cwd": composerDir, "text": text, "settings": settings(reply: false).dict], as: ChatStarted.self)
             draft = ""
             composeError = nil
             refreshChats()
@@ -210,7 +345,7 @@ extension PanelModel {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let c = chat, c.handoff == nil, !text.isEmpty, chatStatus != "running" else { return }
         do {
-            _ = try CoreBridge.shared.call(["op": "chatSend", "id": c.id, "text": text])
+            _ = try CoreBridge.shared.call(["op": "chatSend", "id": c.id, "text": text, "settings": settings(reply: true).dict])
             draft = ""
             composeError = nil
             chatStatus = "running"
@@ -224,7 +359,7 @@ extension PanelModel {
     func retryChat() {
         guard let c = chat, c.handoff == nil, let last = entries.last(where: { $0.kind == "user" }) else { return }
         do {
-            _ = try CoreBridge.shared.call(["op": "chatSend", "id": c.id, "text": last.text])
+            _ = try CoreBridge.shared.call(["op": "chatSend", "id": c.id, "text": last.text, "settings": settings(reply: true).dict])
             chatStatus = "running"
             pollChat()
         } catch {

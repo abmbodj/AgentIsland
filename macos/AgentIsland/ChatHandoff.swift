@@ -15,6 +15,7 @@ struct HandoffLaunch: Decodable {
     var target: String
     var bin: String
     var path: String
+    var args: [String]
 }
 
 enum HandoffDestination: String, CaseIterable, Identifiable {
@@ -61,8 +62,8 @@ enum HandoffLauncher {
     }
 
     static func resumeCommand(_ launch: HandoffLaunch) -> String {
-        let args = launch.agent == "claude" ? ["--resume", launch.sessionId] : ["resume", launch.sessionId]
-        return "cd -- \(shellQuote(launch.cwd)) && exec /usr/bin/env \(shellQuote("PATH=" + launch.path)) " + ([launch.bin] + args).map(shellQuote).joined(separator: " ")
+        let resume = launch.agent == "claude" ? ["--resume", launch.sessionId] : ["resume", launch.sessionId]
+        return "cd -- \(shellQuote(launch.cwd)) && exec /usr/bin/env \(shellQuote("PATH=" + launch.path)) " + ([launch.bin] + launch.args + resume).map(shellQuote).joined(separator: " ")
     }
 
     static func terminalScript(_ launch: HandoffLaunch, receipt: URL) -> String {
