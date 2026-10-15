@@ -694,3 +694,34 @@ fn plan_launch_failure_can_retry_and_restores_previous_permissions() {
     let args=std::fs::read_to_string(root.join("bin/claude.args")).unwrap();
     assert_eq!(args.lines().count(),3); assert!(args.lines().last().unwrap().contains("--permission-mode acceptEdits"));
 }
+
+#[test]
+fn ordinary_turns_supersede_previous_ready_plan_even_when_new_planning_fails() {
+    for mode in [None, Some("plan")] {
+        let (tools, root) = fixture("plan-replaced", &[("claude", CLAUDE)]);
+        let chats = Chats::default();
+        let id = chats.start(&tools,"claude",root.to_str().unwrap(),"plan",vec![],s(None,None,Some("plan"),false)).unwrap();
+        wait_for(&chats,id,"idle");
+        std::fs::remove_file(root.join("bin/claude")).unwrap();
+        chats.send(&tools,id,"A different direction",vec![],s(None,None,mode,false)).unwrap();
+        let t = chats.transcript(id,0).unwrap();
+        assert_eq!(t["plans"][0]["status"],"superseded");
+        assert!(chats.plan_action(&tools,id,1,"implement",None).is_err());
+    }
+}
+
+#[test]
+fn explicit_revision_generation_failure_keeps_reviewed_plan_retryable() {
+    let (tools, root) = fixture("plan-revise-failed", &[("claude", CLAUDE)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools,"claude",root.to_str().unwrap(),"plan",vec![],s(None,None,Some("plan"),false)).unwrap();
+    let ready = wait_for(&chats,id,"idle");
+    let markdown = ready["plans"][0]["markdown"].clone();
+    std::fs::write(root.join("bin/claude"), "#!/bin/sh\nexit 1\n").unwrap();
+    chats.plan_action(&tools,id,1,"revise",Some("Use a different approach")).unwrap();
+    let failed = wait_for(&chats,id,"failed");
+    assert_eq!(failed["plans"][0]["status"], "ready");
+    assert_eq!(failed["plans"][0]["markdown"], markdown);
+    assert_eq!(failed["plans"][1]["status"], "unavailable");
+    chats.plan_action(&tools,id,1,"reject",None).unwrap();
+}

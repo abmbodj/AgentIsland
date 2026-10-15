@@ -13,6 +13,11 @@ pub struct Plan {
 pub struct PlanBook { documents: Vec<Plan> }
 impl PlanBook {
     pub fn documents(&self) -> &[Plan] { &self.documents }
+    pub fn supersede_ready(&mut self) {
+        for plan in &mut self.documents {
+            if plan.status == "ready" { plan.status = "superseded"; }
+        }
+    }
     pub fn latest(&self) -> Option<&Plan> { self.documents.last() }
     pub fn begin(&mut self, entry_index: usize) -> u64 {
         let version = self.latest().map_or(1, |p| p.version + 1);

@@ -456,10 +456,27 @@ impl Store {
             "PermissionRequest" if tool == "ExitPlanMode" && agent_id.is_none() => {
                 // Claude ignores a hook's allow for its plan card (CLI and desktop alike): only its own
                 // UI can accept the plan, so hand off and let the hook return without a decision.
+                let input = &p["tool_input"];
+                let request_id = p["tool_use_id"].as_str().unwrap_or_default();
+                if (request_id.is_empty() && s.pending.iter().any(|a| a.tool == tool && a.input == *input))
+                    || (!request_id.is_empty() && s.plans.iter().any(|plan| plan.item_id == request_id)) {
+                    return None;
+                }
+                for plan in &mut s.plans {
+                    if plan.status == "ready" { plan.status = "superseded"; }
+                }
+                s.pending.retain(|a| a.tool != "ExitPlanMode");
+                let markdown = input["plan"].as_str().unwrap_or_default().to_string();
+                s.plans.push(ObservedPlan {
+                    version: s.plans.last().map_or(1, |plan| plan.version + 1),
+                    status: if markdown.trim().is_empty() { "unavailable" } else { "ready" },
+                    markdown, item_id: request_id.into(), turn_id: String::new(),
+                    completed: true, attention_id,
+                });
                 s.pending.push(Attention {
                     held: false,
                     can_allow_session: false,
-                    ..attention(attention_id, tool, &p["tool_input"], now, None)
+                    ..attention(attention_id, tool, input, now, None)
                 });
                 s.set(State::NeedsInput, now);
             }
@@ -559,6 +576,15 @@ impl Store {
                 s.set(State::Error, now);
             }
             _ => {}
+        }
+        // Hook resolution reveals request liveness, not the user's decision.
+        // Keep the complete proposal in history without inferring acceptance.
+        if s.agent == "claude" {
+            for plan in &mut s.plans {
+                if plan.status == "ready" && !s.pending.iter().any(|a| a.id == plan.attention_id) {
+                    plan.status = "unavailable";
+                }
+            }
         }
         None
     }

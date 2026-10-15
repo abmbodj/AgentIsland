@@ -754,6 +754,7 @@ impl Chats {
                     text = format!("Revise plan version {version}. Stay in planning mode; do not implement.\n\nReviewed plan:\n{markdown}\n\nFeedback:\n{feedback}");
                 }
             }
+            if decision.is_none() { g.plans.supersede_ready(); }
             if settings.mode.as_deref() == Some("plan") && g.last.as_ref().is_some_and(|s| s.mode.as_deref() != Some("plan")) {
                 g.previous_mode = g.last.as_ref().and_then(|s| s.mode.clone());
             }

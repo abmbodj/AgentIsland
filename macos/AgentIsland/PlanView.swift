@@ -25,25 +25,14 @@ extension PanelModel {
     var readerPlans: [ChatPlan] {
         guard let session = readerSession else { return plans }
         if let documents = session.plans, !documents.isEmpty { return documents }
-        if let request = session.pending.last(where: { $0.kind == "plan" || $0.tool == "ExitPlanMode" }) {
-            return [ChatPlan(version: 1, markdown: request.detail, status: "ready")]
-        }
-        if let original = planReader?.session {
-            if let documents = original.plans, !documents.isEmpty { return documents }
-            if let request = original.pending.last(where: { $0.kind == "plan" || $0.tool == "ExitPlanMode" }) {
-                return [ChatPlan(version: 1, markdown: request.detail, status: "unavailable")]
-            }
-        }
+        if let documents = planReader?.session?.plans { return documents }
         return []
     }
     var selectedPlan: ChatPlan? { readerPlans.first { $0.version == planVersion } ?? readerPlans.last }
     var sourcePlanActive: Bool {
         guard let original = planReader?.session else { return true }
         guard let live = snapshot.sessions.first(where: { $0.id == original.id }), ![.ended, .stale, .error].contains(live.state) else { return false }
-        if let request = original.pending.last(where: { $0.kind == "plan" || $0.tool == "ExitPlanMode" }) {
-            return live.pending.contains { $0.id == request.id }
-        }
-        return live.hasPlan
+        return selectedPlan?.status == "ready" && live.pending.contains { $0.kind == "plan" || $0.tool == "ExitPlanMode" }
     }
     func decidePlan(_ plan: ChatPlan, action: String) {
         guard !sendingPlan, let chat, chat.handoff == nil, !disconnected, plan.status == "ready", plans.last(where: { $0.status != "unavailable" })?.version == plan.version else { return }
@@ -62,6 +51,7 @@ extension PanelModel {
                     replySettings = nil
                     if action != "revise" { planFeedback = "" }
                     editingPlan = false
+                    if action == "implement" { planReader = nil }
                 case let .failure(error): planError = error.localizedDescription
                 }
                 pollChat()
