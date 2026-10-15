@@ -204,7 +204,8 @@ final class IslandController {
         panel.orderOut(nil)
     }
 
-    func update(_ snap: Snapshot) {
+    func update(_ raw: Snapshot) {
+        let snap = withoutChatQuestions(raw)
         let previousIDs = Set(snapshot.sessions.flatMap { $0.pending.map(\.id) })
         let gone = Set(snapshot.sessions.map(\.id)).subtracting(snap.sessions.map(\.id))
         if !gone.isEmpty {
@@ -241,6 +242,19 @@ final class IslandController {
         }
         render(animated: true)
         if expanded { scheduleViewed() }
+    }
+
+    /// A chat made here shows its own questions in the conversation, so they get no card and don't open the island.
+    private func withoutChatQuestions(_ raw: Snapshot) -> Snapshot {
+        var snap = raw
+        for i in snap.sessions.indices where model.chatFor(snap.sessions[i]) != nil {
+            let mine = snap.sessions[i].pending.filter { $0.kind == "question" && (!$0.held || $0.releasable) }
+            guard !mine.isEmpty else { continue }
+            for a in mine where a.held { CoreBridge.shared.send(["type": "release", "id": a.id]) }
+            snap.sessions[i].pending.removeAll { a in mine.contains { $0.id == a.id } }
+            snap.attention = max(0, snap.attention - mine.count)
+        }
+        return snap
     }
 
     // MARK: Expansion

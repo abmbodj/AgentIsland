@@ -357,6 +357,8 @@ extension PanelModel {
 
     /// A session row opens its chat when it has one, else jumps to the terminal.
     func tap(_ s: SessionInfo) {
+        // The chat list is only polled while open, so a just-started chat may not be linked to its row yet.
+        if chatFor(s) == nil { refreshChats() }
         if let c = chatFor(s) { openChat(c) } else { onJump(s) }
     }
 
