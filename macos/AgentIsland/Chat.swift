@@ -338,10 +338,36 @@ extension PanelModel {
         if animated { navigate(forward: false, change) } else { change() }
     }
 
+    /// Touch the folder from this app first: macOS asks "allow access to this folder?" on the first read, and the
+    /// agent we spawn would otherwise stall silently behind that prompt. If the read blocks, the island steps
+    /// down below the prompt (`accessPrompt`) so it can be answered.
+    private func withFolderAccess(_ dir: String, _ proceed: @escaping () -> Void) {
+        guard accessPrompt == nil else { return }
+        var done = false
+        DispatchQueue.global().async {
+            _ = try? FileManager.default.contentsOfDirectory(atPath: dir)
+            DispatchQueue.main.async { [self] in
+                done = true
+                accessPrompt = nil
+                composeError = nil
+                proceed()
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [self] in
+            guard !done else { return }
+            accessPrompt = dir
+            composeError = "Waiting for you to allow access to \((dir as NSString).lastPathComponent) in the macOS prompt."
+        }
+    }
+
     /// Start a new chat from the composer.
     func startChat() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        withFolderAccess(composerDir) { [self] in beginChat(text) }
+    }
+
+    private func beginChat(_ text: String) {
         do {
             let r = try CoreBridge.shared.call(["op": "chatStart", "agent": composerAgent, "cwd": composerDir, "text": text, "settings": settings(reply: false).dict], as: ChatStarted.self)
             draft = ""
@@ -357,14 +383,15 @@ extension PanelModel {
     func sendChat() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let c = chat, c.handoff == nil, !text.isEmpty, chatStatus != "running" else { return }
-        do {
-            _ = try CoreBridge.shared.call(["op": "chatSend", "id": c.id, "text": text, "settings": settings(reply: true).dict])
-            draft = ""
-            composeError = nil
-            chatStatus = "running"
-            pollChat()
-        } catch {
-            composeError = error.localizedDescription
+        withFolderAccess(c.cwd) { [self] in
+            do {
+                _ = try CoreBridge.shared.call(["op": "chatSend", "id": c.id, "text": text, "settings": settings(reply: true).dict])
+                draft = ""
+                chatStatus = "running"
+                pollChat()
+            } catch {
+                composeError = error.localizedDescription
+            }
         }
     }
 
