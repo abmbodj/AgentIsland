@@ -36,6 +36,14 @@ Omitted until built (pill, session row, approval card, question card, handoff ca
 
 The panel grows from 440 to 640 wide while a conversation is open and returns to the list on Back (⌘[, or Esc with an empty draft). The message column is 560 max and centered; the composer is pinned at the bottom. Your messages sit in a faint lifted block (white 8%); the agent's reply is plain text with no container. Tool calls are one compact collapsible row each. Code is a monospaced block with a Copy button. Errors and failed sessions use a triangle glyph and neutral text: amber stays "needs you" (a tool row waiting on approval) and green stays "finished", so neither appears in chat otherwise. Auto-scroll follows the stream until you scroll up; a "Latest" pill brings it back.
 
+### Plan review
+
+Plans appear as rendered Markdown in the conversation. Long plans use a bounded inline preview with **Expand plan**, which opens a focused reader inside the same Island. The reader keeps its header and decision footer visible while the document scrolls; Back returns to the conversation at its previous position. Both views show the same version and decision state.
+
+**Writing plan…** is neutral. **Ready for review** is an input-needed state. Implement plan is the primary action, Revise plan opens feedback, and Reject plan leaves the conversation open. Historical versions remain readable without decision buttons. Implementation exits Plan mode and preserves the existing execution permissions. Connected plans use **Continue in Claude/Codex** when the source session must handle the decision. Merely opening that app does not accept a plan.
+
+The renderer uses system text, selectable source, and native controls. Headings, lists, task lists, tables, quotes and code convey document structure; wide code and tables scroll within the reader. No separate plan window or editable task dashboard.
+
 ## 6. Do's and Don'ts
 
 - Do keep the collapsed pill unchanged when nothing needs the user (acceptance criterion 6).

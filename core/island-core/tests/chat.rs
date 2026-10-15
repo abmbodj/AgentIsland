@@ -35,6 +35,59 @@ fn kinds(t: &Value) -> Vec<String> {
     t["entries"].as_array().unwrap().iter().map(|e| e["kind"].as_str().unwrap().to_string()).collect()
 }
 
+#[test]
+fn native_plan_outside_selected_plan_mode_becomes_reviewable() {
+    let script = r##"read first
+echo '{"type":"system","subtype":"init","session_id":"native-plan"}'
+echo '{"type":"control_request","request_id":"exit","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":"# Native proposal"}}}'
+read response
+echo "$response" > "$0.response"
+echo '{"type":"result","subtype":"success","is_error":false,"session_id":"native-plan"}'"##;
+    let (tools, root) = fixture("native-plan", &[("claude", script)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "make a proposal", vec![], s(None, None, Some("acceptEdits"), false)).unwrap();
+    let t = wait_for(&chats, id, "idle");
+    assert_eq!(t["plans"][0]["markdown"], "# Native proposal");
+    assert_eq!(t["plans"][0]["status"], "ready");
+    assert!(std::fs::read_to_string(root.join("bin/claude.response")).unwrap().contains("saved for review"));
+}
+
+#[test]
+fn implementing_in_default_waits_for_a_versioned_native_permission() {
+    let script = r##"read first
+if [ -f "$0.planned" ]; then
+  echo '{"type":"control_request","request_id":"write-1","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"result.txt","content":"revised"}}}'
+  read approval
+  echo "$approval" > "$0.approval"
+else
+  touch "$0.planned"
+  echo '{"type":"control_request","request_id":"exit","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":"# Write result.txt"}}}'
+  read response
+fi
+echo '{"type":"result","subtype":"success","is_error":false,"session_id":"permission-plan"}'"##;
+    let (tools, root) = fixture("plan-permission", &[("claude", script)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "plan", vec![], s(None, None, Some("plan"), false)).unwrap();
+    wait_for(&chats, id, "idle");
+    chats.plan_action(&tools, id, 1, "implement", None).unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    let t = loop {
+        let t = chats.transcript(id, 0).unwrap();
+        if !t["approval"].is_null() { break t; }
+        assert!(Instant::now() < end, "permission not offered: {t}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(t["approval"]["tool"], "Write");
+    assert!(chats.permission(id, "stale-request", true).is_err());
+    chats.permission(id, "write-1", true).unwrap();
+    assert!(chats.permission(id, "write-1", true).is_err());
+    let t = wait_for(&chats, id, "idle");
+    assert!(t["approval"].is_null());
+    let response: Value = serde_json::from_str(&std::fs::read_to_string(root.join("bin/claude.approval")).unwrap()).unwrap();
+    assert_eq!(response["response"]["response"]["behavior"], "allow");
+    assert_eq!(response["response"]["response"]["updatedInput"]["content"], "revised");
+}
+
 const CLAUDE: &str = r#"echo "$@" >> "$0.args"
 echo '{"type":"system","subtype":"init","session_id":"sess-1"}'
 echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m'$$'"}}}'
@@ -534,8 +587,11 @@ read first; echo "$first" >> "$0.in"
 printf '%s\n' '{"type":"system","subtype":"init","session_id":"plan-session"}'
 printf '%s\n' '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m'$$'"}}}'
 printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"# Full plan\n\n- preserve content"}}}'
+case " $* " in *"--permission-mode default"*) ;;
+*)
 printf '%s\n' '{"type":"control_request","request_id":"exit","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":"# Full plan\n\n- preserve content"}}}'
 read response; echo "$response" >> "$0.in"
+;; esac
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"plan-session"}'"##;
     let (tools, root) = fixture("plan-review", &[("claude", script)]);
     let chats = Chats::default();

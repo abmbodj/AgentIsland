@@ -492,6 +492,7 @@ impl Core {
                 .map(|_| Value::Null),
             "chatPlan" => self.chats.plan_action(&self.tools(), req["id"].as_u64().unwrap_or_default(), req["version"].as_u64().unwrap_or_default(), req["action"].as_str().unwrap_or_default(), req["feedback"].as_str()).map(|_| Value::Null),
             "chatAnswer" => self.chats.answer(req["id"].as_u64().unwrap_or_default(), req.get("answers").filter(|a| a.is_object()).cloned()).map(|_| Value::Null),
+            "chatPermission" => self.chats.permission(req["id"].as_u64().unwrap_or_default(), req["requestId"].as_str().unwrap_or_default(), req["allow"] == true).map(|_| Value::Null),
             "chatHandoff" => self.chats.request_handoff(req["id"].as_u64().unwrap_or_default(), req["target"].as_str().unwrap_or_default()).map(|_| Value::Null),
             "chatHandoffCancel" => self.chats.cancel_handoff(req["id"].as_u64().unwrap_or_default()).map(|_| Value::Null),
             "chatHandoffClaim" => Ok(self.chats.claim_handoffs(&self.tools())),

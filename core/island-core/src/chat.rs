@@ -387,6 +387,15 @@ struct State {
     stdin: Option<ChildStdin>,
     /// An AskUserQuestion waiting for the user.
     question: Option<Question>,
+    /// Native approvals during a reviewed plan's implementation, without widening its mode.
+    approval: Option<Permission>,
+    executing_plan: bool,
+}
+
+struct Permission {
+    request_id: String,
+    tool: String,
+    input: Value,
 }
 
 struct Question {
@@ -402,23 +411,34 @@ fn reply(g: &mut State, request_id: &str, body: Value) {
     }
 }
 
-/// A tool permission request: AskUserQuestion waits for the user, anything else is denied
-/// (the island has no approval UI; the permission mode decides what runs unasked).
+/// Questions and reviewed-plan implementation permissions wait for the user.
+/// Plan exits are saved without authorizing execution; other permissions retain existing behavior.
 fn control(g: &mut State, v: &Value) {
     if v["type"] == "control_cancel_request" {
         if g.question.as_ref().is_some_and(|q| Some(q.request_id.as_str()) == v["request_id"].as_str()) { g.question = None }
+        if g.approval.as_ref().is_some_and(|a| Some(a.request_id.as_str()) == v["request_id"].as_str()) { g.approval = None }
         return;
     }
     let r = &v["request"];
     if r["subtype"] != "can_use_tool" { return }
     let id = v["request_id"].as_str().unwrap_or_default();
     // One card at a time; a second concurrent question is declined rather than lost.
-    if r["tool_name"] == "ExitPlanMode" && g.planning_start.is_some() {
+    if r["tool_name"] == "ExitPlanMode" {
+        if g.planning_start.is_none() {
+            // An authoritative proposal can follow Claude entering Plan mode itself.
+            g.previous_mode = g.last.as_ref().and_then(|s| s.mode.clone()).filter(|m| m != "plan");
+            let anchor = g.transcript.push(Entry::new("plan", ""));
+            g.plans.begin(anchor);
+            g.planning_start = Some(anchor + 1);
+            if let Some(settings) = g.last.as_mut() { settings.mode = Some("plan".into()); }
+        }
         if let Some(plan) = r["input"]["plan"].as_str() { g.native_plan = Some(plan.into()); }
         // Settle native approval without granting execution. Review happens after this process exits.
         reply(g, id, json!({"behavior": "deny", "message": "The plan is saved for review in Island. Stop here; do not implement or request approval again."}));
-    } else if r["tool_name"] == "AskUserQuestion" && g.question.is_none() {
+    } else if r["tool_name"] == "AskUserQuestion" && g.question.is_none() && g.approval.is_none() {
         g.question = Some(Question { request_id: id.into(), input: r["input"].clone() });
+    } else if g.executing_plan && g.approval.is_none() && g.question.is_none() {
+        g.approval = Some(Permission { request_id: id.into(), tool: r["tool_name"].as_str().unwrap_or("Tool").into(), input: r["input"].clone() });
     } else {
         let why = if r["tool_name"] == "AskUserQuestion" { "Another question is already open; ask one at a time." } else { "This chat can't ask for tool permission. Ask the user to pick a more permissive mode." };
         reply(g, id, json!({"behavior": "deny", "message": why}));
@@ -501,7 +521,7 @@ impl Chats {
             agent: agent.into(),
             cwd: cwd.into(),
             title,
-            state: Mutex::new(State { transcript: Transcript::default(), plans: PlanBook::default(), planning_start: None, native_plan: None, previous_mode: None, status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None, handoff_token: 0, last: None, stdin: None, question: None }),
+            state: Mutex::new(State { transcript: Transcript::default(), plans: PlanBook::default(), planning_start: None, native_plan: None, previous_mode: None, status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None, handoff_token: 0, last: None, stdin: None, question: None, approval: None, executing_plan: false }),
         });
         self.list.lock().unwrap_or_else(|e| e.into_inner()).insert(id, chat.clone());
         Self::turn(tools, &chat, text, images, settings)?;
@@ -537,6 +557,20 @@ impl Chats {
         };
         reply(&mut g, &q.request_id, body);
         Ok(())
+    }
+
+    pub fn permission(&self, id: u64, request_id: &str, allow: bool) -> Result<(), String> {
+        let chat = self.get(id)?;
+        let mut g = chat.lock();
+        if !g.approval.as_ref().is_some_and(|a| a.request_id == request_id) {
+            return Err("That permission request is no longer active.".into());
+        }
+        let approval = g.approval.take().unwrap();
+        let body = if allow { json!({"behavior":"allow", "updatedInput":approval.input}) }
+            else { json!({"behavior":"deny", "message":"The user denied this tool request."}) };
+        let line = json!({"type":"control_response", "response":{"subtype":"success", "request_id":request_id, "response":body}});
+        let stdin = g.stdin.as_mut().ok_or("The agent is no longer accepting responses.")?;
+        writeln!(stdin, "{line}").and_then(|_| stdin.flush()).map_err(|e| format!("Could not deliver the permission response: {e}. Stop this turn before retrying."))
     }
 
     pub fn request_handoff(&self, id: u64, target: &str) -> Result<(), String> {
@@ -667,6 +701,7 @@ impl Chats {
             "status": g.status.name(), "error": g.error, "sessionId": g.transcript.session_id,
             "handoff": g.handoff, "handoffError": g.handoff_error, "settings": g.last,
             "question": g.question.as_ref().map(|q| &q.input),
+            "approval": g.approval.as_ref().map(|a| json!({"requestId":a.request_id,"tool":a.tool,"detail":serde_json::to_string_pretty(&a.input).unwrap_or_default()})),
             "plans": g.plans.documents(),
             "rev": g.transcript.rev, "entries": g.transcript.since(since),
         }))
@@ -735,6 +770,7 @@ impl Chats {
                 g.planning_start = Some(anchor + 1);
             }
             g.last = Some(settings.clone());
+            g.executing_plan = decision.is_some_and(|(_, action, _)| action == "implement");
             g.error = None;
             g.stopping = false;
             g.status = Status::Running;
@@ -812,6 +848,8 @@ impl Chats {
             g.pid = None;
             g.stdin = None;
             g.question = None;
+            g.approval = None;
+            g.executing_plan = false;
             if g.planning_start.take().is_some() {
                 let success = plan_success && finished && code == Some(0) && !g.stopping;
                 g.plans.finish(success, if success { None } else { Some("Plan generation did not complete. Retry planning.".into()) });
