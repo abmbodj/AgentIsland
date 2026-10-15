@@ -164,48 +164,138 @@ struct Composer: View {
             .padding(.trailing, 6)
             .padding(.vertical, 3)
             .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.07)))
-            if mode == .new { options }
+            options
         }
         .onAppear { if model.summoned { focusTick += 1 } }
     }
 
+    private var chipAgent: String { mode == .new ? model.composerAgent : (model.chat?.agent ?? model.composerAgent) }
+
     private var options: some View {
         HStack(spacing: 6) {
-            HStack(spacing: 2) {
-                ForEach(["claude", "codex"], id: \.self) { a in
-                    Button { model.composerAgent = a } label: {
-                        HStack(spacing: 5) {
-                            AgentMark(agent: a, size: 11)
-                            Text(a == "codex" ? "Codex" : "Claude").font(.system(size: 11, weight: .medium))
+            if mode == .new {
+                HStack(spacing: 2) {
+                    ForEach(["claude", "codex"], id: \.self) { a in
+                        Button { model.composerAgent = a } label: {
+                            HStack(spacing: 5) {
+                                AgentMark(agent: a, size: 11)
+                                Text(a == "codex" ? "Codex" : "Claude").font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundStyle(model.composerAgent == a ? ink : secondary)
+                            .padding(.horizontal, 8)
+                            .frame(height: 22)
+                            .background(Capsule().fill(Color.white.opacity(model.composerAgent == a ? 0.14 : 0)))
+                            .contentShape(Capsule())
                         }
-                        .foregroundStyle(model.composerAgent == a ? ink : secondary)
-                        .padding(.horizontal, 8)
-                        .frame(height: 22)
-                        .background(Capsule().fill(Color.white.opacity(model.composerAgent == a ? 0.14 : 0)))
-                        .contentShape(Capsule())
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(Fmt.agentName(a))
+                        .accessibilityAddTraits(model.composerAgent == a ? .isSelected : [])
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Fmt.agentName(a))
-                    .accessibilityAddTraits(model.composerAgent == a ? .isSelected : [])
                 }
             }
             Spacer(minLength: 6)
-            Button { model.chooseComposerDir() } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "folder").font(.system(size: 10))
-                    Text(model.composerDirName).font(.system(size: 11)).lineLimit(1).truncationMode(.middle)
+            TurnChips(
+                agent: chipAgent,
+                options: model.options[chipAgent],
+                settings: model.settings(reply: mode == .reply),
+                set: { model.setSettings($0, reply: mode == .reply) }
+            )
+            if mode == .new {
+                Button { model.chooseComposerDir() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "folder").font(.system(size: 10))
+                        Text(model.composerDirName).font(.system(size: 11)).lineLimit(1).truncationMode(.middle)
+                    }
+                    .foregroundStyle(secondary)
+                    .padding(.horizontal, 8)
+                    .frame(height: 22)
+                    .contentShape(Rectangle())
                 }
-                .foregroundStyle(secondary)
-                .padding(.horizontal, 8)
-                .frame(height: 22)
-                .contentShape(Rectangle())
+                .buttonStyle(IslandButtonStyle(radius: 6))
+                .help(model.composerDir)
+                .accessibilityLabel("Working folder: \(model.composerDirName)")
+                .accessibilityHint("Choose another folder")
             }
-            .buttonStyle(IslandButtonStyle(radius: 6))
-            .help(model.composerDir)
-            .accessibilityLabel("Working folder: \(model.composerDirName)")
-            .accessibilityHint("Choose another folder")
         }
         .padding(.horizontal, 2)
+    }
+}
+
+/// Mode chip and Model·Effort chip: native menus, styled like the folder chip.
+private struct TurnChips: View {
+    let agent: String
+    let options: AgentOptions?
+    let settings: TurnSettings
+    let set: (TurnSettings) -> Void
+
+    private var models: [ModelOption] { options?.models ?? [] }
+    private var current: ModelOption? { settings.model.flatMap { id in models.first { $0.id == id } } }
+    private var modeID: String { settings.mode ?? (agent == "codex" ? "workspace-write" : "") }
+    private var modeName: String { TurnLabels.modes(agent).first { $0.id == modeID }?.name ?? "Default" }
+    private var modelText: String {
+        let parts = [settings.name ?? settings.model, settings.effort.map(TurnLabels.effort)].compactMap { $0 }
+        return parts.isEmpty ? "Default" : parts.joined(separator: " · ")
+    }
+
+    private func update(_ change: (inout TurnSettings) -> Void) {
+        var s = settings
+        change(&s)
+        set(s)
+    }
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Menu {
+                Picker("Mode", selection: Binding(get: { modeID }, set: { id in update { $0.mode = id.isEmpty ? nil : id } })) {
+                    ForEach(TurnLabels.modes(agent).filter { $0.id != "auto" || current?.auto != false }, id: \.id) {
+                        Text($0.name).tag($0.id)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                chip(icon: TurnLabels.dangerous(settings.mode) ? "exclamationmark.triangle" : nil, text: modeName)
+            }
+            .menuStyle(.button).buttonStyle(IslandButtonStyle(radius: 6)).menuIndicator(.hidden).fixedSize()
+            .accessibilityLabel("Mode: \(modeName)")
+
+            Menu {
+                Picker("Model", selection: Binding(get: { settings.model ?? "" }, set: { id in update { $0.model = id.isEmpty ? nil : id } })) {
+                    Text("Default").tag("")
+                    ForEach(models) { Text($0.name).tag($0.id) }
+                }
+                .pickerStyle(.inline)
+                let levels = settings.effortLevels(in: options)
+                if !levels.isEmpty {
+                    Picker("Effort", selection: Binding(get: { settings.effort ?? "" }, set: { e in update { $0.effort = e.isEmpty ? nil : e } })) {
+                        Text("Default").tag("")
+                        ForEach(levels, id: \.self) { Text(TurnLabels.effort($0)).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                }
+                if agent == "claude", current?.fast == true {
+                    Toggle("Fast", isOn: Binding(get: { settings.fast }, set: { on in update { $0.fast = on } }))
+                }
+                if models.isEmpty {
+                    Text(options?.loading == true ? "Loading models…" : (options?.error ?? "Models unavailable")).disabled(true)
+                }
+            } label: {
+                chip(icon: settings.fast ? "bolt.fill" : nil, text: modelText)
+            }
+            .menuStyle(.button).buttonStyle(IslandButtonStyle(radius: 6)).menuIndicator(.hidden).fixedSize()
+            .accessibilityLabel("Model: \(settings.name ?? settings.model ?? "Default"), effort \(settings.effort.map(TurnLabels.effort) ?? "Default")\(settings.fast ? ", fast" : "")")
+        }
+    }
+
+    private func chip(icon: String?, text: String) -> some View {
+        HStack(spacing: 4) {
+            if let icon { Image(systemName: icon).font(.system(size: 10)) }
+            Text(text).font(.system(size: 11)).lineLimit(1).truncationMode(.middle)
+            Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(muted)
+        }
+        .foregroundStyle(secondary)
+        .padding(.horizontal, 8)
+        .frame(height: 22)
+        .contentShape(Rectangle())
     }
 }
 
@@ -480,16 +570,21 @@ private struct EntryView: View {
         case "user":
             HStack {
                 Spacer(minLength: 56)
-                Text(entry.text)
-                    .font(.system(size: 13))
-                    .foregroundStyle(ink)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08)))
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text(entry.text)
+                        .font(.system(size: 13))
+                        .foregroundStyle(ink)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08)))
+                    if !entry.caption.isEmpty {
+                        Text(entry.caption).font(.system(size: 10)).foregroundStyle(muted).padding(.trailing, 4)
+                    }
+                }
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("You: \(entry.text)")
+            .accessibilityLabel(entry.caption.isEmpty ? "You: \(entry.text)" : "You: \(entry.text). \(entry.caption)")
         case "assistant":
             AssistantText(text: entry.text)
         case "tool":
