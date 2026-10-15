@@ -596,7 +596,12 @@ impl Chats {
                 return Err("The agent is still working.".into());
             }
             g.transcript.turn += 1;
-            let caption = if g.last.as_ref() == Some(&settings) { String::new() } else { settings.caption() };
+            // A change back to all-Default still shows, so the user sees that a choice was turned off.
+            let caption = match (&g.last, settings.caption()) {
+                (Some(prev), _) if prev == &settings => String::new(),
+                (Some(_), c) if c.is_empty() => "Default".to_string(),
+                (_, c) => c,
+            };
             g.transcript.user(text, caption);
             g.last = Some(settings.clone());
             g.error = None;

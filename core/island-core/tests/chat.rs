@@ -443,7 +443,7 @@ fn a_caption_marks_the_first_turn_and_every_change_of_settings() {
     let t = wait_for(&chats, id, "idle");
     let captions: Vec<&str> = t["entries"].as_array().unwrap().iter()
         .filter(|e| e["kind"] == "user").map(|e| e["caption"].as_str().unwrap()).collect();
-    assert_eq!(captions, ["Plan · Opus 5.5 · Extra high · Fast", "", ""], "same settings: no caption; back to all-Default: nothing to say");
+    assert_eq!(captions, ["Plan · Opus 5.5 · Extra high · Fast", "", "Default"], "same settings: no caption; a change back to all-Default says so");
     assert_eq!(t["settings"]["mode"], Value::Null);
     assert_eq!(chats.list()[0]["settings"]["fast"], false);
 }
