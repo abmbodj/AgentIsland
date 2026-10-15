@@ -294,7 +294,7 @@ fn handoff_preserves_the_discovered_symlink_directory_for_env_runtimes() {
 }
 
 #[test]
-fn delayed_launcher_failure_after_opened_restores_replies() {
+fn delayed_launcher_failure_after_opened_preserves_read_only_history() {
     let (tools, root) = fixture("handoff-delayed", &[("claude", CLAUDE)]);
     let chats = Chats::default();
     let id = chats.start(&tools, "claude", root.to_str().unwrap(), "hello").unwrap();
@@ -303,9 +303,14 @@ fn delayed_launcher_failure_after_opened_restores_replies() {
     chats.claim_handoffs(&tools);
     chats.finish_handoff(id, token(&chats, id), None).unwrap();
     chats.finish_handoff(id, token(&chats, id), Some("CLI exited with code 1")).unwrap();
-    assert!(chats.transcript(id, 0).unwrap()["handoff"].is_null());
-    chats.send(&tools, id, "retry here").unwrap();
-    wait_for(&chats, id, "idle");
+    let t = chats.transcript(id, 0).unwrap();
+    assert_eq!(t["handoff"]["status"], "opened");
+    assert_eq!(t["handoffError"], "CLI exited with code 1");
+    assert!(chats.send(&tools, id, "retry here").is_err());
+    chats.request_handoff(id, "terminal").unwrap();
+    assert_eq!(chats.claim_handoffs(&tools).as_array().unwrap().len(), 1);
+    chats.finish_handoff(id, token(&chats, id), Some("retry failed")).unwrap();
+    assert!(chats.send(&tools, id, "still read only").is_err());
 }
 
 fn token(chats: &Chats, id: u64) -> u64 {

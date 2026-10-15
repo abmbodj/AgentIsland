@@ -449,7 +449,10 @@ impl Chats {
             return Ok(()); // duplicate success must not clear a later failure receipt
         }
         if let Some(error) = error {
-            Self::restore_handoff(&mut g);
+            // Once opened, external turns may exist; a later exit cannot return ownership.
+            if g.handoff.as_ref().is_some_and(|h| h.status == "launching") {
+                Self::restore_handoff(&mut g);
+            }
             g.handoff_error = Some(error.into());
         } else {
             g.handoff.as_mut().unwrap().status = "opened";
