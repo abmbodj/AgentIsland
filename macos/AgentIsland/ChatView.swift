@@ -236,7 +236,7 @@ struct ChatView: View {
             header
             CardArea(model: model)
             messages
-            Composer(model: model, mode: .reply)
+            handoffFooter
                 .padding(.horizontal, 6)
                 .padding(.top, 4)
         }
@@ -263,6 +263,22 @@ struct ChatView: View {
             Text(statusText).font(.system(size: 11)).foregroundStyle(secondary)
                 .accessibilityLabel("Status: \(statusText)")
             if let c = model.chat {
+                Menu {
+                    ForEach(HandoffDestination.choices(agent: c.agent)) { destination in
+                        Button(destination.appURL == nil ? "\(destination.name) (not installed)" : destination.name) {
+                            model.requestHandoff(destination)
+                        }
+                        .disabled(destination.appURL == nil)
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.forward.app").font(.system(size: 12)).foregroundStyle(secondary)
+                        .frame(width: 28, height: 26)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .disabled(c.handoff != nil || model.disconnected)
+                .accessibilityLabel("Open in…")
+                .help("Continue this conversation in another app")
                 Button { model.confirmingDelete = c.id } label: {
                     Image(systemName: "trash").font(.system(size: 12)).foregroundStyle(secondary).frame(width: 28, height: 26).contentShape(Rectangle())
                 }
@@ -273,6 +289,45 @@ struct ChatView: View {
         }
         .padding(.horizontal, 2)
         .padding(.bottom, 4)
+    }
+
+    @ViewBuilder private var handoffFooter: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let error = model.chat?.handoffError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 11)).foregroundStyle(secondary)
+                    .textSelection(.enabled)
+                    .accessibilityLabel("Could not open session: \(error)")
+            }
+            if let h = model.chat?.handoff, let destination = h.destination {
+                HStack(spacing: 8) {
+                    if h.status == "opened" {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Continued in \(destination.name)").font(.system(size: 12, weight: .medium))
+                            Text("History through handoff · replies continue in the other app")
+                                .font(.system(size: 10)).foregroundStyle(secondary)
+                        }
+                        Spacer(minLength: 0)
+                        Button("Continue in \(destination.name)") { model.requestHandoff(destination) }
+                            .buttonStyle(.borderless)
+                    } else {
+                        ProgressView().controlSize(.mini)
+                        Text(h.status == "queued" ? "Opening \(destination.name) when finished…" : "Opening \(destination.name)…")
+                            .font(.system(size: 12))
+                        Spacer(minLength: 0)
+                        if h.status == "queued" {
+                            Button("Cancel") { model.cancelHandoff() }.buttonStyle(.borderless)
+                                .accessibilityLabel("Cancel handoff")
+                        }
+                    }
+                }
+                .foregroundStyle(ink)
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.07)))
+            } else {
+                Composer(model: model, mode: .reply)
+            }
+        }
     }
 
     private var messages: some View {
@@ -369,7 +424,7 @@ struct ChatView: View {
             Banner(title: "Lost connection to this session", detail: "It may have ended when Agent Island restarted. Your earlier messages stay above.") {
                 BannerButton(title: "Back to sessions") { model.goBack() }
             }
-        } else if model.chatStatus == "failed" {
+        } else if model.chatStatus == "failed" && model.chat?.handoff == nil {
             Banner(title: "This session stopped unexpectedly", detail: "Your last message may not have been received.") {
                 BannerButton(title: "Try again") { model.retryChat() }
             }
