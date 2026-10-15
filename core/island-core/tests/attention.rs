@@ -267,25 +267,9 @@ fn plan() -> Value {
 }
 
 #[test]
-fn plan_choices_accept_with_auto_edits_or_keep_planning() {
+fn plan_approval_is_a_handoff_the_hook_does_not_wait_on() {
     let mut s = Store::default();
-    let id = s.handle(&claude("PermissionRequest-Bash", plan()), T0).unwrap();
-    s.answer(id, Answer::AllowSession, T0 + 1);
-    let (_, r) = &reply(&mut s)[0];
-    assert_eq!(r["hookSpecificOutput"]["decision"]["updatedPermissions"][0], json!({"type": "setMode", "mode": "acceptEdits", "destination": "session"}));
-
-    let id = s.handle(&claude("PermissionRequest-Bash", plan()), T0 + 2).unwrap();
-    s.answer(id, Answer::Deny, T0 + 3);
-    let (_, r) = &reply(&mut s)[0];
-    assert_eq!(r["hookSpecificOutput"]["decision"]["behavior"], "deny");
-    assert!(r["hookSpecificOutput"]["decision"]["message"].as_str().unwrap().contains("Keep planning"));
-}
-
-#[test]
-fn desktop_plan_approval_is_a_handoff_the_hook_does_not_wait_on() {
-    let mut s = Store::default();
-    let mut m = claude("PermissionRequest-Bash", plan());
-    m.env.insert("CLAUDE_CODE_HOST_SESSION_ID".into(), "local_abc".into());
+    let m = claude("PermissionRequest-Bash", plan());
     assert_eq!(s.handle(&m, T0), None);
     let a = &pending(&s)[0];
     assert!(!a.held);
