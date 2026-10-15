@@ -88,6 +88,7 @@ final class IslandController {
     private var bound: Set<String> = []
     private var heightSink: AnyCancellable?
     private var chatSink: AnyCancellable?
+    private var accessSink: AnyCancellable?
 
     var hoverDelay: TimeInterval { UserDefaults.standard.object(forKey: "hoverDelay") as? Double ?? 0.1 }
     var autoExpand: Bool { UserDefaults.standard.object(forKey: "autoExpand") as? Bool ?? true }
@@ -101,6 +102,9 @@ final class IslandController {
         }
         chatSink = model.$chat.map { $0 != nil }.removeDuplicates().dropFirst().sink { [weak self] _ in
             DispatchQueue.main.async { if self?.expanded == true { self?.render(animated: true) } }
+        }
+        accessSink = model.$accessPrompt.map { $0 != nil }.removeDuplicates().sink { [weak self] on in
+            self?.panel.level = on ? .normal : .statusBar // system prompts sit above normal windows
         }
         model.onJump = { [weak self] s in self?.jump(s) }
         model.onSummon = { [weak self] in self?.summon() }

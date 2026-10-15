@@ -48,6 +48,9 @@ final class PanelModel: ObservableObject {
     /// Which way the next screen change slides; set before the change so the outgoing screen uses it too.
     @Published var navForward = true
     @Published var composeError: String?
+    /// The folder macOS is asking about right now; the island lowers itself so the prompt shows.
+    @Published var accessPrompt: String?
+    var checkingAccess = false
     /// Each agent's model menu from the core (`chatOptions`).
     @Published var options: [String: AgentOptions] = [:]
     /// The open conversation's choices once changed there; nil means the chat's last settings.
