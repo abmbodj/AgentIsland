@@ -26,6 +26,12 @@ xcodebuild -project AgentIsland.xcodeproj -scheme AgentIsland -configuration Rel
   MARKETING_VERSION="$V" CURRENT_PROJECT_VERSION="$(date +%Y%m%d%H%M)" \
   CODE_SIGN_IDENTITY="$IDENTITY" OTHER_CODE_SIGN_FLAGS="--timestamp"
 APP="$OUT/AgentIsland.xcarchive/Products/Applications/Agent Island.app"
+# Sparkle ships ad-hoc signed helpers; notarization needs each one Developer ID signed with a
+# secure timestamp, innermost first, then the app again (keeping its entitlements).
+SP="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+for f in "$SP/XPCServices/Installer.xpc" "$SP/XPCServices/Downloader.xpc" "$SP/Autoupdate" "$SP/Updater.app" "$APP/Contents/Frameworks/Sparkle.framework" "$APP"; do
+  codesign --force --options runtime --timestamp --preserve-metadata=entitlements --sign "$IDENTITY" "$f"
+done
 codesign --verify --deep --strict "$APP"
 
 DMG="$OUT/AgentIsland-$V.dmg"
