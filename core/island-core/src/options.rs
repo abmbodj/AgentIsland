@@ -26,15 +26,23 @@ fn strings(v: &Value) -> Vec<String> {
     v.as_array().into_iter().flatten().filter_map(|s| s.as_str().map(str::to_string)).collect()
 }
 
-/// Models from Claude Code's `initialize` control response, minus its own "default" entry
+/// A model's label with its version: some CLI builds report a bare family ("Opus") as `displayName`
+/// and lead the description with the versioned name ("Opus 5.5 · Best for…").
+fn claude_name(m: &Value, id: &str) -> String {
+    let name = m["displayName"].as_str().unwrap_or(id);
+    let lead = m["description"].as_str().and_then(|d| d.split(" · ").next()).unwrap_or_default();
+    if lead.len() > name.len() && lead.starts_with(name) { lead.into() } else { name.into() }
+}
+
+/// Models from Claude Code's `initialize` control response, minus its own default entry
 /// (the composer has its own Default, which passes no flag).
 pub fn parse_claude(response: &Value) -> Vec<ModelOption> {
     response["models"].as_array().into_iter().flatten()
         .filter_map(|m| {
-            let id = m["value"].as_str().filter(|v| !v.is_empty() && *v != "default")?;
+            let id = m["value"].as_str().filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case("default"))?;
             Some(ModelOption {
                 id: id.into(),
-                name: m["displayName"].as_str().unwrap_or(id).into(),
+                name: claude_name(m, id),
                 efforts: strings(&m["supportedEffortLevels"]),
                 auto: m["supportsAutoMode"] == true,
                 fast: m["supportsFastMode"] == true,

@@ -24,6 +24,18 @@ fn claude_initialize_lists_models_with_their_effort_levels() {
 }
 
 #[test]
+fn claude_names_carry_their_version_and_any_cased_default_is_dropped() {
+    // Some CLI builds report a bare family ("Opus") as displayName and put "Opus 5.5" in the description,
+    // and spell their own default entry "Default".
+    let v = read("claude-initialize-short-names.jsonl");
+    let m = parse_claude(&v["response"]["response"]);
+    let ids: Vec<&str> = m.iter().map(|m| m.id.as_str()).collect();
+    assert!(!ids.iter().any(|id| id.eq_ignore_ascii_case("default")), "{ids:?}");
+    let names: Vec<&str> = m.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names, ["Opus 5.5", "Fable 5", "Sonnet 5.5", "Haiku 5.5"]);
+}
+
+#[test]
 fn codex_models_keep_only_listed_ones_with_their_reasoning_levels() {
     let m = parse_codex(&read("codex-models.json"));
     let ids: Vec<&str> = m.iter().map(|m| m.id.as_str()).collect();
