@@ -15,7 +15,7 @@ final class PanelModel: ObservableObject {
     @Published var isOpen = false {
         didSet {
             if isOpen && !oldValue { refreshPRs(); refreshChats(); startPolling() }
-            if !isOpen { chat = nil; entries = []; composing = false } // collapsing returns to the list; running chats carry on
+            if !isOpen { chat = nil; entries = []; composing = false; confirmingDelete = nil } // collapsing returns to the list; running chats carry on
         }
     }
     /// Open PR button state and chosen base branch, by session id.

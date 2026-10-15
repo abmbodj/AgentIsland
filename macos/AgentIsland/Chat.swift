@@ -179,6 +179,8 @@ extension PanelModel {
             entries = []
             composeError = nil
             composing = false
+            disconnected = false
+            confirmingDelete = nil
             refreshChats()
         }
         if animated { navigate(forward: false, change) } else { change() }
@@ -231,7 +233,14 @@ extension PanelModel {
         _ = try? CoreBridge.shared.call(["op": "chatDelete", "id": c.id])
         withAnimation(Motion.quick) {
             confirmingDelete = nil
-            if chat?.id == c.id { closeChat() }
+            if chat?.id == c.id {
+                // Not through navigate(): the poll must never see this chat open after it is gone.
+                navForward = false
+                chat = nil
+                entries = []
+                composing = false
+                disconnected = false
+            }
             chats.removeAll { $0.id == c.id }
         }
         refreshChats()
