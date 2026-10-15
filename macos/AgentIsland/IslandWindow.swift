@@ -329,7 +329,7 @@ final class IslandController {
                 model.undo()
             } else if model.canGoBack {
                 // Inside a chat Esc steps back, but never throws away a draft.
-                if model.draft.isEmpty { model.goBack() } else { endSummon(collapse: false) }
+                if model.planReader != nil || model.draft.isEmpty { model.goBack() } else { endSummon(collapse: false) }
             } else {
                 endSummon(collapse: true)
             }

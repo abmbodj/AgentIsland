@@ -15,7 +15,7 @@ final class PanelModel: ObservableObject {
     @Published var isOpen = false {
         didSet {
             if isOpen && !oldValue { refreshPRs(); refreshChats(); startPolling() }
-            if !isOpen { chat = nil; entries = []; composing = false; confirmingDelete = nil } // collapsing returns to the list; running chats carry on
+            if !isOpen { planReader = nil; chat = nil; entries = []; composing = false; confirmingDelete = nil } // collapsing returns to the list; running chats carry on
         }
     }
     /// Open PR button state and chosen base branch, by session id.
@@ -36,6 +36,14 @@ final class PanelModel: ObservableObject {
     // Composer chats (see Chat.swift). `chat` is the open conversation; nil shows the session list.
     @Published var chats: [ChatInfo] = []
     @Published var chat: ChatInfo?
+    @Published var chatApproval: ChatPermission?
+    @Published var plans: [ChatPlan] = []
+    @Published var planReader: PlanReaderSource?
+    @Published var planVersion: Int?
+    @Published var planFeedback = ""
+    @Published var editingPlan = false
+    @Published var sendingPlan = false
+    @Published var planError: String?
     @Published var entries: [ChatEntry] = []
     @Published var chatStatus = "idle"
     @Published var chatError: String?
@@ -249,7 +257,12 @@ struct PanelView: View {
             case .list: list.transition(.screen(forward: model.navForward))
             }
         }
+        .opacity(model.planReader == nil ? 1 : 0)
+        .allowsHitTesting(model.planReader == nil)
+        .accessibilityHidden(model.planReader != nil)
+        .overlay { if model.planReader != nil { PlanReader(model: model) } }
         .animation(Motion.screen, value: model.screen)
+        .frame(height: model.planReader != nil ? PanelModel.chatHeight : nil)
         .clipped()
         .padding(.horizontal, 8)
         .padding(.top, 4)
@@ -365,7 +378,7 @@ private struct SessionRow: View {
         .onTapGesture { model.tap(session) }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint(model.chatFor(session) == nil ? "Shows this session's terminal" : "Opens this conversation")
+        .accessibilityHint(session.hasPlan && model.chatFor(session) == nil ? "Opens this session’s plan" : model.chatFor(session) == nil ? "Shows this session's terminal" : "Opens this conversation")
         .contextMenu {
             if let c = model.chatFor(session) { Button("Delete chat") { model.confirmingDelete = c.id } }
         }

@@ -106,7 +106,10 @@ private struct CardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            if !item.held {
+            if item.kind == "plan" || item.tool == "ExitPlanMode" {
+                Button("Read plan") { model.openSessionPlan(session) }.buttonStyle(.borderless)
+                Text("Review the proposal, then continue in \(Fmt.agentName(session.agent)).").font(.system(size: 12)).foregroundStyle(secondary)
+            } else if !item.held {
                 handoff
             } else if item.kind == "question" {
                 question

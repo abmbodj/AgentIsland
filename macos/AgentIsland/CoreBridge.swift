@@ -26,6 +26,8 @@ struct SessionInfo: Decodable, Equatable, Identifiable {
     var inline: Bool
     /// The desktop app offered to create a PR: its recap.
     var prOffer: String?
+    var plans: [ChatPlan]?
+    var hasPlan: Bool { !(plans ?? []).isEmpty || pending.contains { $0.kind == "plan" || $0.tool == "ExitPlanMode" } }
 }
 
 enum SessionState: String, Decodable {
