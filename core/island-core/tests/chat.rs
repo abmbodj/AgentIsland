@@ -500,3 +500,29 @@ echo '{"type":"result","subtype":"success","is_error":false,"session_id":"s"}'"#
     assert!(log.contains("\"behavior\":\"allow\"") && log.contains("\"answers\":{\"Which?\":\"A\"}"), "{log}");
     assert!(chats.start(&tools, "codex", root.to_str().unwrap(), "x", vec![img], Settings::default()).is_err(), "images are Claude only");
 }
+
+#[test]
+fn other_tool_permissions_are_denied_and_skip_declines_the_question() {
+    let script = r#"read first
+echo '{"type":"control_request","request_id":"b1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{}}}'
+read denied
+echo "$denied" >> "$0.in"
+echo '{"type":"control_request","request_id":"q1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[]}}}'
+read skipped
+echo "$skipped" >> "$0.in"
+echo '{"type":"result","subtype":"success","is_error":false,"session_id":"s"}'"#;
+    let (tools, root) = fixture("deny", &[("claude", script)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "go", vec![], Settings::default()).unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    while chats.transcript(id, 0).unwrap()["question"].is_null() {
+        assert!(Instant::now() < end, "no question arrived");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    chats.answer(id, None).unwrap();
+    wait_for(&chats, id, "idle");
+    let log = std::fs::read_to_string(root.join("bin/claude.in")).unwrap();
+    let lines: Vec<&str> = log.lines().collect();
+    assert!(lines[0].contains("\"request_id\":\"b1\"") && lines[0].contains("\"behavior\":\"deny\""), "{log}");
+    assert!(lines[1].contains("\"request_id\":\"q1\"") && lines[1].contains("\"behavior\":\"deny\""), "{log}");
+}

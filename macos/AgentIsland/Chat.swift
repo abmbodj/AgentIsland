@@ -495,6 +495,8 @@ extension PanelModel {
     /// After a failed turn: send the last message again.
     func retryChat() {
         guard let c = chat, c.handoff == nil, let last = entries.last(where: { $0.kind == "user" }) else { return }
+        // ponytail: retry resends the text only; images aren't kept.
+        guard !last.text.isEmpty else { composeError = "Attach the image again and send it as a new message."; return }
         do {
             _ = try CoreBridge.shared.call(["op": "chatSend", "id": c.id, "text": last.text, "settings": settings(reply: true).dict])
             chatStatus = "running"

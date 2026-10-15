@@ -675,14 +675,14 @@ private struct QuestionCard: View {
 
     private func submit() {
         // Keep the options' order, as a multi-select answer reads best in the order it was offered.
-        model.answerChat(Dictionary(uniqueKeysWithValues: questions.questions.map { q in
-            (q.question, q.options.map(\.label).filter { (model.questionPicks[q.question] ?? []).contains($0) }.joined(separator: ", "))
-        }))
+        model.answerChat(questions.questions.reduce(into: [:]) { out, q in
+            out[q.question] = q.options.map(\.label).filter { (model.questionPicks[q.question] ?? []).contains($0) }.joined(separator: ", ")
+        })
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(questions.questions, id: \.question) { q in
+            ForEach(Array(questions.questions.enumerated()), id: \.offset) { _, q in
                 VStack(alignment: .leading, spacing: 6) {
                     if let h = q.header, !h.isEmpty {
                         Text(h.uppercased()).font(.system(size: 10, weight: .semibold)).foregroundStyle(muted)

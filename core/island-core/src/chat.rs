@@ -400,13 +400,19 @@ fn reply(g: &mut State, request_id: &str, body: Value) {
 /// A tool permission request: AskUserQuestion waits for the user, anything else is denied
 /// (the island has no approval UI; the permission mode decides what runs unasked).
 fn control(g: &mut State, v: &Value) {
+    if v["type"] == "control_cancel_request" {
+        if g.question.as_ref().is_some_and(|q| Some(q.request_id.as_str()) == v["request_id"].as_str()) { g.question = None }
+        return;
+    }
     let r = &v["request"];
     if r["subtype"] != "can_use_tool" { return }
     let id = v["request_id"].as_str().unwrap_or_default();
-    if r["tool_name"] == "AskUserQuestion" {
+    // One card at a time; a second concurrent question is declined rather than lost.
+    if r["tool_name"] == "AskUserQuestion" && g.question.is_none() {
         g.question = Some(Question { request_id: id.into(), input: r["input"].clone() });
     } else {
-        reply(g, id, json!({"behavior": "deny", "message": "This chat can't ask for tool permission. Ask the user to pick a more permissive mode."}));
+        let why = if r["tool_name"] == "AskUserQuestion" { "Another question is already open; ask one at a time." } else { "This chat can't ask for tool permission. Ask the user to pick a more permissive mode." };
+        reply(g, id, json!({"behavior": "deny", "message": why}));
     }
 }
 
@@ -480,7 +486,7 @@ impl Chats {
             *n += 1;
             *n
         };
-        let title = truncate(text.trim().lines().next().unwrap_or_default(), 60);
+        let title = if text.trim().is_empty() { "Image".to_string() } else { truncate(text.trim().lines().next().unwrap_or_default(), 60) };
         let chat = Arc::new(Chat {
             id,
             agent: agent.into(),
@@ -723,7 +729,7 @@ impl Chats {
             for line in BufReader::new(out).lines().map_while(Result::ok) {
                 let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
                 let mut g = chat.lock();
-                if v["type"] == "control_request" {
+                if matches!(v["type"].as_str(), Some("control_request" | "control_cancel_request")) {
                     control(&mut g, &v);
                     continue;
                 }
