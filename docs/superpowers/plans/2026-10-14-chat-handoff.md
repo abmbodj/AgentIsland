@@ -15,8 +15,8 @@
 Files: core/island-core/src/chat.rs, src/server.rs, tests/chat.rs.
 - [ ] Add failing behavior tests for queue while running, claim only after process exit, single claim, cancellation, send rejection, failure recovery, successful read-only state, agent/destination mismatch, deletion, and missing session.
 - [ ] Run cargo test -p island-core --test chat and observe failure.
-- [ ] Implement request_handoff(id,target), cancel_handoff(id), claim_handoffs(tools), finish_handoff(id,error). Expose chatHandoff, chatHandoffCancel, chatHandoffClaim, chatHandoffFinish operations.
-- [ ] Summaries/transcripts contain handoff {target,status} or null and handoffError. States: queued, launching, opened. Claims return [{id,agent,cwd,sessionId,target,bin,path}]. Reopen uses request_handoff after opened to the SAME target and remains read-only on reopen failure.
+- [ ] Implement request_handoff(id,target), cancel_handoff(id), claim_handoffs(tools), finish_handoff(id,token,error). Expose chatHandoff, chatHandoffCancel, chatHandoffClaim, chatHandoffFinish operations.
+- [ ] Summaries/transcripts contain handoff {target,status} or null and handoffError. States: queued, launching, opened. Claims return [{id,token,agent,cwd,sessionId,target,bin,path}]. Reopen uses request_handoff after opened to the SAME target and remains read-only on reopen failure.
 - [ ] Validate destination values terminal,iterm,ghostty,claudeDesktop,codexDesktop, matching agent. Resolve executable and folder at claim time; missing session/executable/folder clears pending handoff and records a useful error.
 - [ ] Keep status/send reservation atomic under state mutex. Existing transcript unchanged by handoff.
 - [ ] Run chat tests and full cargo test; commit core changes.
@@ -24,7 +24,7 @@ Files: core/island-core/src/chat.rs, src/server.rs, tests/chat.rs.
 ### Task 2: macOS launcher and UI
 Files: macos/AgentIsland/ChatHandoff.swift (new), Chat.swift, ChatView.swift, PanelView.swift; scripts/dev/handoff-tests.swift (new).
 - [ ] Write runnable Swift tests executing generated shell commands against a recording binary, covering spaces, quotes, newlines, dollar/backtick injection, exact session arguments, and cwd preservation; observe missing feature failure.
-- [ ] Implement destination names/bundle IDs, installed detection, exact-session launcher. Terminal do script; iTerm create window with command; Ghostty new window with surface configuration command. Claude Desktop runs absolute binary --desktop --resume session ID off main with bounded output and timeout; Codex opens codex://threads/session ID via NSWorkspace completion.
+- [ ] Implement destination names/bundle IDs, installed detection, exact-session launcher. Terminal command document; iTerm create window with command; Ghostty new application instance with startup arguments. Claude Desktop runs a desktop-capable installed binary --desktop --resume session ID through script -q -e off main with bounded output and timeout; Codex opens codex://threads/session ID via NSWorkspace completion.
 - [ ] Keep all quoting in pure helpers tested by the harness. Launch terminal resume commands using original folder and supplied bin/path.
 - [ ] Add handoff fields to chat models, menu to header, waiting/cancel, progress/error, and read-only Continue in footer. Suppress retry after handoff. Poll pending handoffs even when panel closes and preserve error receipts across navigation.
 - [ ] Build with xcodebuild and run Swift tests.

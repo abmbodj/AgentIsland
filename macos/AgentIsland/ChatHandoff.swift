@@ -8,6 +8,7 @@ struct ChatHandoff: Decodable, Equatable {
 
 struct HandoffLaunch: Decodable {
     var id: Int
+    var token: UInt64 = 0
     var agent: String
     var cwd: String
     var sessionId: String
@@ -46,9 +47,17 @@ enum HandoffDestination: String, CaseIterable, Identifiable {
 /// Launches the native saved session, never a new prompt or a copied transcript.
 enum HandoffLauncher {
     private static let queue = DispatchQueue(label: "agentisland.handoff", attributes: .concurrent)
+    private static let automationQueue = DispatchQueue(label: "agentisland.handoff.automation")
 
     static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    static func appleScriptString(_ value: String) -> String {
+        "\"" + value.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r") + "\""
     }
 
     static func resumeCommand(_ launch: HandoffLaunch) -> String {
@@ -57,7 +66,8 @@ enum HandoffLauncher {
     }
 
     static func terminalScript(_ launch: HandoffLaunch, receipt: URL) -> String {
-        "#!/bin/sh\n/bin/rm -f -- \"$0\"\nprintf started > " + shellQuote(receipt.path)
+        "#!/bin/sh\n/bin/rm -f -- \"$0\"\nprintf '%s' \"$$\" > " + shellQuote(receipt.deletingLastPathComponent().appendingPathComponent("pid").path)
+            + "\nprintf started > " + shellQuote(receipt.path)
             + "\n(" + resumeCommand(launch) + ")\nresult=$?\nif [ -d " + shellQuote(receipt.deletingLastPathComponent().path)
             + " ]; then printf 'exited:%s' \"$result\" > " + shellQuote(receipt.path)
             + "; fi\nexit \"$result\"\n"
@@ -91,8 +101,8 @@ enum HandoffLauncher {
         }
     }
 
-    /// Terminal and iTerm accept executable .command documents; Ghostty accepts startup arguments.
-    /// No Apple Events permission or typing into an existing terminal is needed.
+    /// Terminal opens a command document, iTerm uses its native window API, and Ghostty uses startup arguments.
+    /// Each starts a new terminal; no commands are typed into an existing shell.
     private static func openTerminal(_ launch: HandoffLaunch, destination: HandoffDestination, appURL: URL, completion: @escaping (String?) -> Void) {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("island-resume-\(UUID().uuidString)")
         let file = folder.appendingPathComponent("Resume.command")
@@ -109,27 +119,36 @@ enum HandoffLauncher {
                 try? FileManager.default.removeItem(at: folder)
                 completion("Could not open \(destination.name): \(error.localizedDescription)")
             } else {
-                queue.async {
-                    defer { try? FileManager.default.removeItem(at: folder) }
-                    let deadline = Date().addingTimeInterval(15)
-                    var started: Date?
-                    while Date() < deadline {
-                        let status = (try? String(contentsOf: receipt, encoding: .utf8)) ?? ""
-                        if status.hasPrefix("exited:") {
-                            completion("The session exited before it was ready in \(destination.name) (\(status)). You can retry or choose another app.")
-                            return
-                        }
-                        if status == "started" {
-                            if started == nil { started = Date() }
-                            if Date().timeIntervalSince(started!) >= 1 { completion(nil); return }
-                        }
-                        Thread.sleep(forTimeInterval: 0.1)
-                    }
-                    completion("\(destination.name) opened but did not start the session. Check its window, then try again.")
-                }
+                watchTerminal(folder: folder, destination: destination, report: completion)
             }
         }
-        if destination == .ghostty {
+        if destination == .iterm {
+            automationQueue.async {
+                let command = appleScriptString("/bin/sh " + shellQuote(file.path))
+                let source = """
+                with timeout of 30 seconds
+                    tell application id "com.googlecode.iterm2"
+                        activate
+                        create window with default profile command \(command)
+                    end tell
+                end timeout
+                """
+                var error: NSDictionary?
+                guard let script = NSAppleScript(source: source) else {
+                    try? FileManager.default.removeItem(at: folder)
+                    completion("Could not prepare the iTerm2 launcher.")
+                    return
+                }
+                script.executeAndReturnError(&error)
+                if let error {
+                    try? FileManager.default.removeItem(at: folder)
+                    let detail = error[NSAppleScript.errorMessage] as? String ?? "Automation failed."
+                    completion("Could not open iTerm2: \(detail) Allow Agent Island in System Settings → Privacy & Security → Automation, then retry.")
+                } else {
+                    watchTerminal(folder: folder, destination: destination, report: completion)
+                }
+            }
+        } else if destination == .ghostty {
             config.createsNewApplicationInstance = true
             config.arguments = ["--working-directory=" + launch.cwd, "-e", "/bin/sh", file.path]
             NSWorkspace.shared.openApplication(at: appURL, configuration: config, completionHandler: finished)
@@ -138,21 +157,28 @@ enum HandoffLauncher {
         }
     }
 
+    /// Continue observing the process after dispatch: a slow startup failure still restores replies.
+    /// The core attempt token prevents an old window's exit from changing a newer handoff.
+    static func watchTerminal(folder: URL, destination: HandoffDestination, report: @escaping (String?) -> Void) {
+        TerminalLaunchWatch(folder: folder, destination: destination, report: report).start()
+    }
+
     /// Output goes to a private file so even a stalled/noisy CLI cannot block a pipe reader.
-    private static func runAgent(_ bin: String, arguments: [String], launch: HandoffLaunch, timeout: TimeInterval) -> (Int32?, String) {
+    static func runAgent(_ bin: String, arguments: [String], launch: HandoffLaunch, timeout: TimeInterval) -> (Int32?, String) {
         let log = FileManager.default.temporaryDirectory.appendingPathComponent("island-handoff-\(UUID().uuidString).log")
         guard FileManager.default.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600]),
               let output = try? FileHandle(forWritingTo: log) else { return (nil, "Could not prepare the desktop launcher.") }
         defer { try? output.close(); try? FileManager.default.removeItem(at: log) }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: bin)
-        process.arguments = arguments
+        let needsTerminal = arguments.contains("--desktop")
+        process.executableURL = URL(fileURLWithPath: needsTerminal ? "/usr/bin/script" : bin)
+        process.arguments = needsTerminal ? ["-q", "-e", log.path, bin] + arguments : arguments
         process.currentDirectoryURL = URL(fileURLWithPath: launch.cwd)
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = URL(fileURLWithPath: bin).deletingLastPathComponent().path + ":" + launch.path
         process.environment = env
         process.standardInput = FileHandle.nullDevice
-        process.standardOutput = output
+        process.standardOutput = needsTerminal ? FileHandle.nullDevice : output
         process.standardError = output
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
@@ -178,5 +204,61 @@ enum HandoffLauncher {
         let (status, output) = runAgent(bin, arguments: ["--desktop", "--resume", launch.sessionId], launch: launch, timeout: 30)
         if status == 0 { return nil }
         return output.isEmpty ? "Could not resume this session in Claude Desktop." : String(output.prefix(2_000))
+    }
+}
+
+/// One timer per external terminal, without occupying a worker thread while the user chats.
+private final class TerminalLaunchWatch {
+    private static let queue = DispatchQueue(label: "agentisland.handoff.monitor")
+    private let folder: URL
+    private let destination: HandoffDestination
+    private let report: (String?) -> Void
+    private let deadline = Date().addingTimeInterval(15)
+    private var started: Date?
+    private var reported = false
+    private var timer: DispatchSourceTimer?
+
+    init(folder: URL, destination: HandoffDestination, report: @escaping (String?) -> Void) {
+        self.folder = folder; self.destination = destination; self.report = report
+    }
+
+    func start() {
+        let timer = DispatchSource.makeTimerSource(queue: Self.queue)
+        self.timer = timer
+        timer.schedule(deadline: .now(), repeating: .milliseconds(200))
+        timer.setEventHandler { [self] in poll() }
+        timer.resume()
+    }
+
+    private func stop() {
+        timer?.setEventHandler {}
+        timer?.cancel()
+        timer = nil
+        try? FileManager.default.removeItem(at: folder)
+    }
+
+    private func poll() {
+        let status = (try? String(contentsOf: folder.appendingPathComponent("status"), encoding: .utf8)) ?? ""
+        if status.hasPrefix("exited:") {
+            if status != "exited:0" || !reported {
+                report("The session exited in \(destination.name) (\(status)). You can retry or choose another app.")
+            }
+            stop()
+        } else if status == "started" {
+            if let text = try? String(contentsOf: folder.appendingPathComponent("pid"), encoding: .utf8),
+               let pid = Int32(text), kill(pid, 0) != 0 && errno == ESRCH {
+                if !reported { report("The terminal closed before the session started. Try again.") }
+                stop()
+                return
+            }
+            if started == nil { started = Date() }
+            if !reported && Date().timeIntervalSince(started!) >= 1 {
+                reported = true
+                report(nil)
+            }
+        } else if !reported && Date() >= deadline {
+            report("\(destination.name) opened but did not start the session. Check its window, then try again.")
+            stop()
+        }
     }
 }

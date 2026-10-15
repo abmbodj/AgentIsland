@@ -305,6 +305,12 @@ extension PanelModel {
 
     func requestHandoff(_ destination: HandoffDestination) {
         guard let c = chat else { return }
+        if c.handoff?.status == "opened", let session = snapshot.sessions.first(where: {
+            $0.id == c.sessionId && $0.state != .ended && $0.terminal.bundleId == destination.bundleID
+        }) {
+            onJump(session)
+            return
+        }
         do {
             _ = try CoreBridge.shared.call(["op": "chatHandoff", "id": c.id, "target": destination.rawValue])
             composeError = nil
@@ -328,7 +334,7 @@ extension PanelModel {
         if !launches.isEmpty { refreshChats() }
         for launch in launches {
             HandoffLauncher.open(launch) { [weak self] error in
-                var request: [String: Any] = ["op": "chatHandoffFinish", "id": launch.id]
+                var request: [String: Any] = ["op": "chatHandoffFinish", "id": launch.id, "token": launch.token]
                 if let error { request["error"] = error }
                 _ = try? CoreBridge.shared.call(request)
                 self?.refreshChats()
