@@ -1,0 +1,9 @@
+# Resume notch chats in another app
+
+Approved conversation design: an Open in… menu in the chat header offers Apple Terminal, iTerm2, Ghostty, and the matching agent desktop app. Resume the same native session in its original folder, preserving the full native conversation history. Never create a replacement chat or send a transcript as a new prompt.
+
+Selecting a destination while a turn runs queues the handoff until the process exits. Show a cancellable waiting message. A queued or launching handoff blocks further notch replies. The core owns this state so UI navigation cannot bypass it. Claim ready launches exactly once. A failed launch restores notch replies and exposes its error; a successful launch makes the notch history read-only with Continue in [app]. History in the notch is the transcript through handoff; external turns are shown by the destination app.
+
+Use installed app detection. Missing destinations remain discoverable but disabled. Desktop capabilities require real verification: Claude uses its documented --desktop --resume command; Codex uses its existing exact-thread URL handler, verified against the installed app. Use native terminal automation, safely quote all shell and AppleScript values, and use absolute agent executable paths. Do not alter agent approval settings during handoff.
+
+Test with real messages carrying a unique memory marker, click each destination, inspect the prior messages, and send a follow-up that recalls the marker. Test both agents in each terminal, matching desktops, queued handoff with navigation/collapse, cancellation, failure recovery, and read-only behavior. Build and run from derived data for branch testing; never install a branch build. Finish with cargo test, xcodebuild, clean independent review, PR against main, squash merge, and scripts/install.sh from merged main.
