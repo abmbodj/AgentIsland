@@ -490,6 +490,10 @@ impl Core {
                 self.chats.stop(req["id"].as_u64().unwrap_or_default());
                 Ok(Value::Null)
             }
+            "chatDelete" => {
+                self.chats.delete(req["id"].as_u64().unwrap_or_default());
+                Ok(Value::Null)
+            }
             "transcript" => self.chats.transcript(req["id"].as_u64().unwrap_or_default(), req["since"].as_u64().unwrap_or_default()),
             "chatList" => Ok(self.chats.list()),
             "snapshot" => Ok(serde_json::from_str(&Inner::snapshot_json(&self.inner.lock())).unwrap_or(Value::Null)),

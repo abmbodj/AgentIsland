@@ -243,7 +243,15 @@ struct ChatView: View {
         .frame(height: PanelModel.chatHeight)
     }
 
-    private var header: some View {
+    @ViewBuilder private var header: some View {
+        if let c = model.chat, model.confirmingDelete == c.id {
+            DeleteConfirm(chat: c, model: model).padding(.bottom, 4).transition(.opacity)
+        } else {
+            headerBar.transition(.opacity)
+        }
+    }
+
+    private var headerBar: some View {
         HStack(spacing: 8) {
             BackButton { model.goBack() }
             Spacer(minLength: 0)
@@ -253,8 +261,15 @@ struct ChatView: View {
             }
             Spacer(minLength: 0)
             Text(statusText).font(.system(size: 11)).foregroundStyle(secondary)
-                .frame(minWidth: 70, alignment: .trailing)
                 .accessibilityLabel("Status: \(statusText)")
+            if let c = model.chat {
+                Button { model.confirmingDelete = c.id } label: {
+                    Image(systemName: "trash").font(.system(size: 12)).foregroundStyle(secondary).frame(width: 28, height: 26).contentShape(Rectangle())
+                }
+                .buttonStyle(IslandButtonStyle(radius: 6))
+                .accessibilityLabel("Delete chat")
+                .help("Delete this chat")
+            }
         }
         .padding(.horizontal, 2)
         .padding(.bottom, 4)
@@ -661,6 +676,41 @@ struct NewChatView: View {
     }
 }
 
+// MARK: - Deleting a chat
+
+/// Inline confirmation in place of the row or header: no modal, nothing destructive on a single click.
+struct DeleteConfirm: View {
+    let chat: ChatInfo
+    @ObservedObject var model: PanelModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Delete this chat?").font(.system(size: 12, weight: .semibold)).foregroundStyle(ink)
+                Text(chat.status == "running" ? "It stops the agent and removes the conversation." : "It removes the conversation.")
+                    .font(.system(size: 11)).foregroundStyle(secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Button { withAnimation(Motion.quick) { model.confirmingDelete = nil } } label: {
+                Text("Cancel").font(.system(size: 12)).foregroundStyle(secondary).padding(.horizontal, 10).frame(height: 26).contentShape(Rectangle())
+            }
+            .buttonStyle(IslandButtonStyle(radius: 6))
+            Button { model.deleteChat(chat) } label: {
+                Text("Delete").font(.system(size: 12, weight: .semibold)).foregroundStyle(ink)
+                    .padding(.horizontal, 10).frame(height: 26)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.14)))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(IslandButtonStyle(radius: 6))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Delete \(chat.title)?")
+    }
+}
+
 // MARK: - Session list rows for chats
 
 /// A chat the agent's hooks haven't reported as a session (yet): same row, driven by the chat's own status.
@@ -693,6 +743,14 @@ struct ChatRow: View {
                 Text(status).font(.system(size: 11)).foregroundStyle(secondary)
             }
             Spacer(minLength: 8)
+            Button { model.confirmingDelete = chat.id } label: {
+                Image(systemName: "trash").font(.system(size: 12)).foregroundStyle(secondary).frame(width: 26, height: 26).contentShape(Rectangle())
+            }
+            .buttonStyle(IslandButtonStyle(radius: 6))
+            .opacity(hover ? 1 : 0)
+            .animation(Motion.quick, value: hover)
+            .accessibilityHidden(true) // offered as an action on the row instead
+            .help("Delete this chat")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -700,8 +758,10 @@ struct ChatRow: View {
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         .onTapGesture { model.openChat(chat) }
+        .contextMenu { Button("Delete chat") { model.confirmingDelete = chat.id } }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Opens this conversation")
+        .accessibilityActions { Button("Delete chat") { model.confirmingDelete = chat.id } }
     }
 }

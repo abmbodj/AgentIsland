@@ -165,6 +165,11 @@ final class IslandController {
         // Replace the snapshot with an empty one (the next real change overwrites it): the "no sessions" state.
         observers.append((dnc, dnc.addObserver(forName: Self.debugName("emptySnapshot"), object: nil, queue: .main) { [weak self] _ in self?.update(Snapshot()) }))
         observers.append((dnc, dnc.addObserver(forName: Self.debugName("back"), object: nil, queue: .main) { [weak self] _ in self?.model.goBack() }))
+        // "confirm" asks to delete the first chat; "delete" confirms it.
+        observers.append((dnc, dnc.addObserver(forName: Self.debugName("deletechat"), object: nil, queue: .main) { [weak self] n in
+            guard let m = self?.model, let c = m.chats.first else { return }
+            if (n.object as? String) == "delete" { m.deleteChat(c) } else { m.confirmingDelete = c.id }
+        }))
         observers.append((dnc, dnc.addObserver(forName: Self.debugName("newchat"), object: nil, queue: .main) { [weak self] _ in
             self?.setExpanded(true, pinned: true)
             self?.model.openCompose()

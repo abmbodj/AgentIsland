@@ -43,6 +43,8 @@ final class PanelModel: ObservableObject {
     @Published var draft = ""
     /// The new-chat screen was opened on purpose (it also shows by itself when there is nothing else to show).
     @Published var composing = false
+    /// The chat whose delete is awaiting its inline confirmation.
+    @Published var confirmingDelete: Int?
     /// Which way the next screen change slides; set before the change so the outgoing screen uses it too.
     @Published var navForward = true
     @Published var composeError: String?
@@ -254,10 +256,18 @@ struct PanelView: View {
         VStack(spacing: 1) {
             // Chats the agents' hooks haven't reported as sessions; matched ones are the session rows below.
             ForEach(model.chats.filter { c in !model.snapshot.sessions.contains { $0.id == c.sessionId } }) { c in
-                ChatRow(chat: c, model: model)
+                if model.confirmingDelete == c.id {
+                    DeleteConfirm(chat: c, model: model).transition(.opacity)
+                } else {
+                    ChatRow(chat: c, model: model).transition(.opacity)
+                }
             }
             ForEach(model.snapshot.sessions) { s in
-                SessionRow(session: s, now: now, model: model)
+                if let c = model.chatFor(s), model.confirmingDelete == c.id {
+                    DeleteConfirm(chat: c, model: model).transition(.opacity)
+                } else {
+                    SessionRow(session: s, now: now, model: model)
+                }
                 if model.openGroups.contains(s.id) {
                     ForEach(s.subagents, id: \.id) { sub in
                         SubagentRow(sub: sub, agent: s.agent, now: now)
@@ -344,6 +354,9 @@ private struct SessionRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint(model.chatFor(session) == nil ? "Shows this session's terminal" : "Opens this conversation")
+        .contextMenu {
+            if let c = model.chatFor(session) { Button("Delete chat") { model.confirmingDelete = c.id } }
+        }
         // The row is one combined element, so its PR control is offered as actions.
         .accessibilityActions {
             switch model.pr[session.id] {
@@ -354,6 +367,7 @@ private struct SessionRow: View {
             case .failed: Button("Retry pull request") { model.retryPR(session) }
             default: EmptyView()
             }
+            if let c = model.chatFor(session) { Button("Delete chat") { model.confirmingDelete = c.id } }
         }
     }
 }

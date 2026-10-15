@@ -136,3 +136,25 @@ echo '{"type":"result","subtype":"success","is_error":false}'"#;
     let id = chats.start(&tools, "claude", root.to_str().unwrap(), "go").unwrap();
     assert_eq!(kinds(&wait_for(&chats, id, "idle")), ["user", "assistant"]);
 }
+
+#[test]
+fn delete_kills_a_running_turn_and_forgets_the_chat() {
+    let (tools, root) = fixture("delete", &[("claude", "echo $$ > \"$0.pid\"\nsleep 30")]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "go").unwrap();
+    let pidfile = root.join("bin/claude.pid");
+    let end = Instant::now() + Duration::from_secs(10);
+    while !pidfile.exists() {
+        assert!(Instant::now() < end, "agent never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_string();
+    chats.delete(id);
+    assert!(chats.list().as_array().unwrap().is_empty());
+    assert!(chats.transcript(id, 0).is_err());
+    let alive = || std::process::Command::new("kill").args(["-0", &pid]).output().unwrap().status.success();
+    while alive() {
+        assert!(Instant::now() < end, "agent still running after delete");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
