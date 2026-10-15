@@ -186,7 +186,7 @@ fn handoff_waits_for_exit_and_is_claimed_once() {
     assert!(claims[0]["path"].as_str().unwrap().contains(root.join("bin").to_str().unwrap()));
     assert_eq!(chats.claim_handoffs(&tools), serde_json::json!([]));
     assert!(chats.cancel_handoff(id).is_err());
-    chats.finish_handoff(id, None).unwrap();
+    chats.finish_handoff(id, token(&chats, id), None).unwrap();
     let after = chats.transcript(id, 0).unwrap();
     assert_eq!(after["entries"], before["entries"]);
     assert_eq!(after["handoff"]["status"], "opened");
@@ -194,7 +194,7 @@ fn handoff_waits_for_exit_and_is_claimed_once() {
     assert!(chats.request_handoff(id, "iterm").is_err());
     chats.request_handoff(id, "terminal").unwrap();
     assert_eq!(chats.claim_handoffs(&tools).as_array().unwrap().len(), 1);
-    chats.finish_handoff(id, Some("could not reopen")).unwrap();
+    chats.finish_handoff(id, token(&chats, id), Some("could not reopen")).unwrap();
     assert_eq!(chats.list()[0]["handoff"]["status"], "opened");
     assert!(chats.send(&tools, id, "still blocked").is_err());
 }
@@ -207,7 +207,7 @@ fn handoff_cancellation_and_failure_restore_replies() {
     wait_for(&chats, id, "idle");
     assert!(chats.request_handoff(id, "codexDesktop").is_err());
     assert!(chats.request_handoff(id, "unknown").is_err());
-    assert!(chats.finish_handoff(id, None).is_err());
+    assert!(chats.finish_handoff(id, token(&chats, id), None).is_err());
     chats.request_handoff(id, "claudeDesktop").unwrap();
     chats.cancel_handoff(id).unwrap();
     assert!(chats.transcript(id, 0).unwrap()["handoff"].is_null());
@@ -216,7 +216,7 @@ fn handoff_cancellation_and_failure_restore_replies() {
     chats.request_handoff(id, "ghostty").unwrap();
     chats.claim_handoffs(&tools);
     assert!(chats.send(&tools, id, "launching").is_err());
-    chats.finish_handoff(id, Some("Ghostty could not open")).unwrap();
+    chats.finish_handoff(id, token(&chats, id), Some("Ghostty could not open")).unwrap();
     let t = chats.transcript(id, 0).unwrap();
     assert!(t["handoff"].is_null());
     assert_eq!(t["handoffError"], "Ghostty could not open");
@@ -226,7 +226,7 @@ fn handoff_cancellation_and_failure_restore_replies() {
     chats.delete(id);
     assert_eq!(chats.claim_handoffs(&tools), serde_json::json!([]));
     assert!(chats.request_handoff(id, "terminal").is_err());
-    assert!(chats.finish_handoff(id, None).is_err());
+    assert!(chats.finish_handoff(id, token(&chats, id), None).is_err());
 }
 
 #[test]
@@ -291,4 +291,49 @@ fn handoff_preserves_the_discovered_symlink_directory_for_env_runtimes() {
         .current_dir(claim["cwd"].as_str().unwrap()).output().unwrap();
     assert!(resumed.status.success(), "{}", String::from_utf8_lossy(&resumed.stderr));
     assert!(String::from_utf8_lossy(&resumed.stdout).contains("symlink-session"));
+}
+
+#[test]
+fn delayed_launcher_failure_after_opened_restores_replies() {
+    let (tools, root) = fixture("handoff-delayed", &[("claude", CLAUDE)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "hello").unwrap();
+    wait_for(&chats, id, "idle");
+    chats.request_handoff(id, "terminal").unwrap();
+    chats.claim_handoffs(&tools);
+    chats.finish_handoff(id, token(&chats, id), None).unwrap();
+    chats.finish_handoff(id, token(&chats, id), Some("CLI exited with code 1")).unwrap();
+    assert!(chats.transcript(id, 0).unwrap()["handoff"].is_null());
+    chats.send(&tools, id, "retry here").unwrap();
+    wait_for(&chats, id, "idle");
+}
+
+fn token(chats: &Chats, id: u64) -> u64 {
+    chats.transcript(id, 0).ok().and_then(|t| t["handoff"]["token"].as_u64()).unwrap_or(0)
+}
+
+#[test]
+fn stale_launcher_callbacks_cannot_change_a_later_attempt() {
+    let (tools, root) = fixture("handoff-stale", &[("claude", CLAUDE)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "hello").unwrap();
+    wait_for(&chats, id, "idle");
+    chats.request_handoff(id, "terminal").unwrap();
+    let cancelled = token(&chats, id);
+    chats.cancel_handoff(id).unwrap();
+    chats.request_handoff(id, "terminal").unwrap();
+    let first = chats.claim_handoffs(&tools)[0]["token"].as_u64().unwrap();
+    assert!(first > cancelled);
+    chats.finish_handoff(id, first, None).unwrap();
+    chats.finish_handoff(id, first, None).unwrap(); // duplicate success is harmless
+    chats.request_handoff(id, "terminal").unwrap();
+    let reopened = chats.claim_handoffs(&tools)[0]["token"].as_u64().unwrap();
+    assert!(reopened > first);
+    assert!(chats.finish_handoff(id, first, Some("old failure")).is_err());
+    assert_eq!(chats.transcript(id, 0).unwrap()["handoff"]["status"], "launching");
+    assert!(chats.transcript(id, 0).unwrap()["handoffError"].is_null());
+    chats.finish_handoff(id, reopened, None).unwrap();
+    chats.finish_handoff(id, reopened, Some("reopened CLI exited nonzero")).unwrap();
+    assert_eq!(chats.transcript(id, 0).unwrap()["handoff"]["status"], "opened");
+    assert!(chats.send(&tools, id, "still read only").is_err());
 }

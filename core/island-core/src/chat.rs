@@ -246,6 +246,7 @@ impl Status {
 
 #[derive(Clone, Serialize)]
 struct Handoff {
+    token: u64,
     target: String,
     status: &'static str,
     #[serde(skip)]
@@ -260,6 +261,7 @@ struct State {
     stopping: bool,
     handoff: Option<Handoff>,
     handoff_error: Option<String>,
+    handoff_token: u64,
 }
 
 pub struct Chat {
@@ -336,7 +338,7 @@ impl Chats {
             agent: agent.into(),
             cwd: cwd.into(),
             title,
-            state: Mutex::new(State { transcript: Transcript::default(), status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None }),
+            state: Mutex::new(State { transcript: Transcript::default(), status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None, handoff_token: 0 }),
         });
         self.list.lock().unwrap_or_else(|e| e.into_inner()).insert(id, chat.clone());
         Self::turn(tools, &chat, text)?;
@@ -370,7 +372,8 @@ impl Chats {
             }
             true
         } else { false };
-        g.handoff = Some(Handoff { target: target.into(), status: "queued", reopened });
+        g.handoff_token = g.handoff_token.checked_add(1).ok_or("Too many handoff attempts for this chat.")?;
+        g.handoff = Some(Handoff { token: g.handoff_token, target: target.into(), status: "queued", reopened });
         g.handoff_error = None;
         Ok(())
     }
@@ -416,6 +419,7 @@ impl Chats {
                 }
                 Ok(json!({"id": chat.id, "agent": chat.agent, "cwd": chat.cwd,
                     "sessionId": session, "target": g.handoff.as_ref().unwrap().target,
+                    "token": g.handoff.as_ref().unwrap().token,
                     "bin": bin, "path": path.to_string_lossy()}))
             })();
             match resolved {
@@ -432,11 +436,14 @@ impl Chats {
         Value::Array(claims)
     }
 
-    pub fn finish_handoff(&self, id: u64, error: Option<&str>) -> Result<(), String> {
+    pub fn finish_handoff(&self, id: u64, token: u64, error: Option<&str>) -> Result<(), String> {
         let chat = self.get(id)?;
         let mut g = chat.lock();
-        if !g.handoff.as_ref().is_some_and(|h| h.status == "launching") {
-            return Err("No handoff is launching.".into());
+        if !g.handoff.as_ref().is_some_and(|h| h.token == token && matches!(h.status, "launching" | "opened")) {
+            return Err("That handoff attempt is no longer active.".into());
+        }
+        if error.is_none() && g.handoff.as_ref().is_some_and(|h| h.status == "opened") {
+            return Ok(()); // duplicate success must not clear a later failure receipt
         }
         if let Some(error) = error {
             Self::restore_handoff(&mut g);
