@@ -2,7 +2,7 @@
 //! its JSON event stream folded into an in-memory transcript the UI pulls by revision.
 //! A follow-up turn resumes the agent's own session; Stop kills the turn's process group.
 use crate::pr::Tools;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
@@ -13,6 +13,61 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 const OUTPUT_LIMIT: usize = 4_000;
 const STDERR_LIMIT: usize = 600;
+const CLAUDE_MODES: &[&str] = &["plan", "acceptEdits", "auto", "bypassPermissions"];
+const CODEX_MODES: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
+
+/// One turn's choices. None means Default: no flag, so the CLI's own config decides.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Settings {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    /// Claude permission mode or Codex sandbox; Codex treats None as workspace-write.
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub fast: bool,
+    /// The model's display name, for transcript captions only.
+    pub name: Option<String>,
+}
+
+impl Settings {
+    /// Refuse anything a CLI could read as another flag; modes come from a fixed list.
+    pub fn validate(&self, agent: &str) -> Result<(), String> {
+        for v in [&self.model, &self.effort].into_iter().flatten() {
+            if v.is_empty() || v.starts_with('-') || v.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                return Err(format!("\"{v}\" is not a valid model or effort."));
+            }
+        }
+        let modes = if agent == "codex" { CODEX_MODES } else { CLAUDE_MODES };
+        if let Some(m) = self.mode.as_deref().filter(|m| !modes.contains(m)) {
+            return Err(format!("\"{m}\" is not a mode the island can run {agent} in."));
+        }
+        if self.fast && agent != "claude" {
+            return Err("Fast mode is only available for Claude.".into());
+        }
+        Ok(())
+    }
+
+    /// The CLI flags for these choices, placed before any resume arguments and the prompt.
+    pub fn args(&self, agent: &str) -> Vec<String> {
+        let mut a: Vec<String> = Vec::new();
+        let mut flag = |f: &str, v: String| {
+            a.push(f.into());
+            a.push(v);
+        };
+        if agent == "claude" {
+            if let Some(m) = &self.model { flag("--model", m.clone()) }
+            if let Some(e) = &self.effort { flag("--effort", e.clone()) }
+            if let Some(p) = &self.mode { flag("--permission-mode", p.clone()) }
+            if self.fast { flag("--settings", "{\"fastMode\":true}".into()) }
+        } else {
+            if let Some(m) = &self.model { flag("-m", m.clone()) }
+            if let Some(e) = &self.effort { flag("-c", format!("model_reasoning_effort=\"{e}\"")) }
+            // ponytail: codex exec can't ask for approval, so it defaults to the working-directory sandbox.
+            flag("-s", self.mode.clone().unwrap_or_else(|| "workspace-write".into()));
+        }
+        a
+    }
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -265,6 +320,7 @@ struct State {
     handoff: Option<Handoff>,
     handoff_error: Option<String>,
     handoff_token: u64,
+    last: Option<Settings>,
 }
 
 pub struct Chat {
@@ -296,12 +352,13 @@ pub struct Chats {
     next: Mutex<u64>,
 }
 
-fn command(tools: &Tools, agent: &str, cwd: &str, prompt: &str, session: Option<&str>) -> Result<Command, String> {
+fn command(tools: &Tools, agent: &str, cwd: &str, prompt: &str, session: Option<&str>, settings: &Settings) -> Result<Command, String> {
     let bin: PathBuf = tools.find(agent).ok_or_else(|| format!("Could not find {agent} on this Mac."))?;
     let mut c = Command::new(&bin);
     match agent {
         "claude" => {
             c.args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]);
+            c.args(settings.args(agent));
             if let Some(s) = session {
                 c.args(["--resume", s]);
             }
@@ -309,8 +366,7 @@ fn command(tools: &Tools, agent: &str, cwd: &str, prompt: &str, session: Option<
         }
         "codex" => {
             c.args(["exec", "--json", "--skip-git-repo-check"]);
-            // ponytail: codex exec can't ask for approval, so it runs sandboxed to the working directory instead.
-            c.args(["-c", "sandbox_mode=\"workspace-write\""]);
+            c.args(settings.args(agent));
             if let Some(s) = session {
                 c.args(["resume", s]);
             }
@@ -323,10 +379,11 @@ fn command(tools: &Tools, agent: &str, cwd: &str, prompt: &str, session: Option<
 }
 
 impl Chats {
-    pub fn start(&self, tools: &Tools, agent: &str, cwd: &str, text: &str) -> Result<u64, String> {
+    pub fn start(&self, tools: &Tools, agent: &str, cwd: &str, text: &str, settings: Settings) -> Result<u64, String> {
         if text.trim().is_empty() {
             return Err("Write a message first.".into());
         }
+        settings.validate(agent)?;
         if !std::path::Path::new(cwd).is_dir() {
             return Err(format!("{cwd} is not a folder."));
         }
@@ -341,10 +398,10 @@ impl Chats {
             agent: agent.into(),
             cwd: cwd.into(),
             title,
-            state: Mutex::new(State { transcript: Transcript::default(), status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None, handoff_token: 0 }),
+            state: Mutex::new(State { transcript: Transcript::default(), status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None, handoff_token: 0, last: None }),
         });
         self.list.lock().unwrap_or_else(|e| e.into_inner()).insert(id, chat.clone());
-        Self::turn(tools, &chat, text)?;
+        Self::turn(tools, &chat, text, settings)?;
         Ok(id)
     }
 
@@ -352,12 +409,13 @@ impl Chats {
         self.list.lock().unwrap_or_else(|e| e.into_inner()).get(&id).cloned().ok_or_else(|| "That chat no longer exists.".into())
     }
 
-    pub fn send(&self, tools: &Tools, id: u64, text: &str) -> Result<(), String> {
+    pub fn send(&self, tools: &Tools, id: u64, text: &str, settings: Settings) -> Result<(), String> {
         let chat = self.get(id)?;
         if text.trim().is_empty() {
             return Err("Write a message first.".into());
         }
-        Self::turn(tools, &chat, text)
+        settings.validate(&chat.agent)?;
+        Self::turn(tools, &chat, text, settings)
     }
 
     pub fn request_handoff(&self, id: u64, target: &str) -> Result<(), String> {
@@ -501,7 +559,7 @@ impl Chats {
         ids.into_iter().for_each(|id| self.stop(id));
     }
 
-    fn turn(tools: &Tools, chat: &Arc<Chat>, text: &str) -> Result<(), String> {
+    fn turn(tools: &Tools, chat: &Arc<Chat>, text: &str, settings: Settings) -> Result<(), String> {
         let session = {
             let mut g = chat.lock();
             if g.handoff.is_some() {
@@ -512,12 +570,13 @@ impl Chats {
             }
             g.transcript.turn += 1;
             g.transcript.user(text);
+            g.last = Some(settings.clone());
             g.error = None;
             g.stopping = false;
             g.status = Status::Running;
             g.transcript.session_id.clone()
         };
-        let spawned = command(tools, &chat.agent, &chat.cwd, text, session.as_deref()).and_then(|mut c| c.spawn().map_err(|e| e.to_string()));
+        let spawned = command(tools, &chat.agent, &chat.cwd, text, session.as_deref(), &settings).and_then(|mut c| c.spawn().map_err(|e| e.to_string()));
         let mut child = match spawned {
             Ok(c) => c,
             Err(e) => { Self::fail(chat, &e); return Ok(()); },

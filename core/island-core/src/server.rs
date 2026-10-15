@@ -485,9 +485,11 @@ impl Core {
             "chatOptions" => Ok(self.options.get(&self.tools(), req["refresh"] == true)),
             "chatStart" => {
                 let s = |k: &str| req[k].as_str().unwrap_or_default();
-                self.chats.start(&self.tools(), s("agent"), s("cwd"), s("text")).map(|id| json!({"id": id}))
+                turn_settings(&req).and_then(|t| self.chats.start(&self.tools(), s("agent"), s("cwd"), s("text"), t)).map(|id| json!({"id": id}))
             }
-            "chatSend" => self.chats.send(&self.tools(), req["id"].as_u64().unwrap_or_default(), req["text"].as_str().unwrap_or_default()).map(|_| Value::Null),
+            "chatSend" => turn_settings(&req)
+                .and_then(|t| self.chats.send(&self.tools(), req["id"].as_u64().unwrap_or_default(), req["text"].as_str().unwrap_or_default(), t))
+                .map(|_| Value::Null),
             "chatHandoff" => self.chats.request_handoff(req["id"].as_u64().unwrap_or_default(), req["target"].as_str().unwrap_or_default()).map(|_| Value::Null),
             "chatHandoffCancel" => self.chats.cancel_handoff(req["id"].as_u64().unwrap_or_default()).map(|_| Value::Null),
             "chatHandoffClaim" => Ok(self.chats.claim_handoffs(&self.tools())),
@@ -521,6 +523,14 @@ impl Drop for Core {
         self.inner.wake.notify_all();
         kq_user(self.inner.kq, 0, libc::NOTE_TRIGGER); // wake kevent()
     }
+}
+
+/// A turn's optional `settings` object; absent means Default for everything.
+fn turn_settings(req: &Value) -> Result<crate::chat::Settings, String> {
+    if req["settings"].is_null() {
+        return Ok(Default::default());
+    }
+    serde_json::from_value(req["settings"].clone()).map_err(|e| format!("Unreadable settings: {e}"))
 }
 
 /// Keep the stable hook path pointing at the bundle's current binary (survives app moves/updates).
