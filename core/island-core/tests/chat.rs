@@ -414,6 +414,7 @@ fn settings_that_could_smuggle_flags_or_unknown_modes_are_refused() {
     for bad in [
         s(Some("--dangerously-skip-permissions"), None, None, false),
         s(None, Some("high max"), None, false),
+        s(None, Some("high\"x"), None, false),
         s(Some(""), None, None, false),
         s(None, None, Some("manual"), false),
         s(None, None, Some("dontAsk"), false),

@@ -166,7 +166,10 @@ struct Composer: View {
             .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.07)))
             options
         }
-        .onAppear { if model.summoned { focusTick += 1 } }
+        .onAppear {
+            model.loadOptions(refresh: true)
+            if model.summoned { focusTick += 1 }
+        }
     }
 
     private var chipAgent: String { mode == .new ? model.composerAgent : (model.chat?.agent ?? model.composerAgent) }

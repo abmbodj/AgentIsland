@@ -33,7 +33,7 @@ impl Settings {
     /// Refuse anything a CLI could read as another flag; modes come from a fixed list.
     pub fn validate(&self, agent: &str) -> Result<(), String> {
         for v in [&self.model, &self.effort].into_iter().flatten() {
-            if v.is_empty() || v.starts_with('-') || v.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            if v.is_empty() || v.starts_with('-') || v.chars().any(|c| c.is_whitespace() || c.is_control() || c == '"' || c == '\\') {
                 return Err(format!("\"{v}\" is not a valid model or effort."));
             }
         }

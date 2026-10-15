@@ -29,7 +29,7 @@ Every picker except Codex mode has a **Default** entry that passes no flag, so t
 | D8 | When the model changes: effort snaps down to the highest level the model supports; an unsupported mode (Auto without `supportsAutoMode`) or Fast (without `supportsFastMode`) returns to Default/off. Pickers list only supported values. |
 | D9 | Claude fast mode toggle, shown only for models with `supportsFastMode`. |
 | D10 | Layout: a **Mode** chip and a **Model·Effort** chip (its menu holds Model, Effort and Fast). In a conversation the agent toggle and folder are absent. |
-| D11 | The user's transcript message gets a faint caption ("Plan · Opus 5.5 · High") on the first turn and whenever settings changed since the previous turn. |
+| D11 | The user's transcript message gets a faint caption ("Plan · Opus 5.5 · High") on the first turn and whenever settings changed since the previous turn; a change back to all-Default is captioned "Default". |
 | D12 | Terminal handoffs (`terminal`, `iterm`, `ghostty`) resume with the chat's last flags. Desktop handoffs are unchanged (the apps take no flags). |
 | D13 | Bypass and Full access are selectable and remembered with no confirmation; the chip shows a neutral `exclamationmark.triangle` while active (never amber, which means "needs you"). |
 
@@ -42,7 +42,7 @@ The Rust core owns discovery and flag-building; Swift renders. `command()` is th
 - **Claude:** spawn `claude -p --input-format stream-json --output-format stream-json --verbose`, write `{"type":"control_request","request_id":"1","request":{"subtype":"initialize"}}`, read stdout lines until the `control_response`, then kill the process group. Keep `response.response.models[]` minus the `value == "default"` entry. Per model keep `value`, `displayName`, `supportedEffortLevels` (absent = effort unsupported), `supportsAutoMode`, `supportsFastMode`. A 20s timeout fails the fetch.
 - **Codex:** `codex debug models`, parse JSON, keep models with `visibility == "list"`: `slug`, `display_name` (fall back to slug), `supported_reasoning_levels[].effort`.
 - Results are normalised to one shape per agent:
-  `{models: [{id, name, efforts: [String], auto: bool, fast: bool}], fetchedAt, error}`.
+  `{models: [{id, name, efforts: [String], auto: bool, fast: bool}], error, loading}`.
 - An in-memory cache per agent on `Core`. Bridge op `chatOptions {refresh: bool}` returns the cache immediately; when `refresh` is set and the cache is missing or older than an hour, it starts one background fetch per agent (never two at once). Swift calls it with `refresh` at launch and on composer open, and re-polls while a fetch is in flight.
 - A missing CLI or failed fetch keeps the previous list and records `error`; with no list, the pickers show only Default.
 

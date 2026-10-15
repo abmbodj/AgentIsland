@@ -117,6 +117,7 @@ extension TurnSettings {
             if s.fast, !(m?.fast ?? false) { s.fast = false }
         } else {
             s.fast = false
+            if s.mode == "workspace-write" { s.mode = nil } // Codex's default
         }
         return s
     }
@@ -396,6 +397,7 @@ extension PanelModel {
             if let c = chat, let updated = list.first(where: { $0.id == c.id }) {
                 if chat?.handoff != updated.handoff { chat?.handoff = updated.handoff }
                 if chat?.handoffError != updated.handoffError { chat?.handoffError = updated.handoffError }
+                if chat?.settings != updated.settings { chat?.settings = updated.settings }
             }
         }
     }
