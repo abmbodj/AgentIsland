@@ -14,7 +14,7 @@ Status: under construction. See [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Install
 
-Download [`AgentIsland.dmg`](https://github.com/abmbodj/AgentIsland/releases/latest/download/AgentIsland.dmg), drag the app to Applications, open it. First launch offers to move itself to Applications, then one **Set Up** button connects Claude Code and Codex, turns on open-at-login and automatic updates. Updates arrive from GitHub Releases on their own.
+Download [`AgentIsland.dmg`](https://github.com/abmbodj/AgentIsland/releases/latest/download/AgentIsland.dmg), drag the app to Applications, open it. First launch offers to move itself to Applications, then one **Set Up** button connects Claude Code and Codex, turns on open-at-login and automatic updates. Updates then arrive from GitHub Releases on their own.
 
 ## Releasing
 

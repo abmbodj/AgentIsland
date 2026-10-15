@@ -91,6 +91,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return false
         #else
         let bundle = Bundle.main.bundleURL
+        let me = ProcessInfo.processInfo.processIdentifier
+        if let other = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "").first(where: { $0.processIdentifier != me }) {
+            other.activate() // the installed copy is already running: don't replace it underneath itself
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+            return true
+        }
         let dest = URL(fileURLWithPath: "/Applications/Agent Island.app")
         guard !bundle.path.hasPrefix("/Applications/"), !UserDefaults.standard.bool(forKey: "declinedMove") else { return false }
         let alert = NSAlert()
