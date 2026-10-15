@@ -15,7 +15,7 @@ final class PanelModel: ObservableObject {
     @Published var isOpen = false {
         didSet {
             if isOpen && !oldValue { refreshPRs(); refreshChats(); startPolling() }
-            if !isOpen { chat = nil; entries = [] } // collapsing returns to the list; running chats carry on
+            if !isOpen { chat = nil; entries = []; composing = false } // collapsing returns to the list; running chats carry on
         }
     }
     /// Open PR button state and chosen base branch, by session id.
@@ -41,6 +41,10 @@ final class PanelModel: ObservableObject {
     @Published var chatError: String?
     @Published var disconnected = false
     @Published var draft = ""
+    /// The new-chat screen was opened on purpose (it also shows by itself when there is nothing else to show).
+    @Published var composing = false
+    /// Which way the next screen change slides; set before the change so the outgoing screen uses it too.
+    @Published var navForward = true
     @Published var composeError: String?
     var rev = 0
     var pollTimer: Timer?
@@ -200,46 +204,39 @@ struct PanelView: View {
     @State private var cardHeight: CGFloat = 0
     @State private var rowsHeight: CGFloat = 0
     @State private var stripHeight: CGFloat = 0
-    @State private var composerHeight: CGFloat = 0
 
     private var list: some View {
         TimelineView(.periodic(from: .now, by: model.isOpen ? 1 : 3600)) { ctx in
             VStack(alignment: .leading, spacing: 0) {
-                if model.snapshot.sessions.isEmpty && model.chats.isEmpty {
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 8) {
-                            AgentMark(agent: "claude", size: 14)
-                            AgentMark(agent: "codex", size: 14)
-                        }
-                        .padding(.bottom, 6)
-                        .accessibilityHidden(true)
-                        Text("No agent sessions").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
-                        Text("Type below to start one, or open Claude Code or Codex.").font(.system(size: 11)).foregroundStyle(secondary)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                } else {
-                    VStack(alignment: .leading, spacing: 0) { CardArea(model: model) }
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0 }
-                    // Panel padding is 4 top + 10 bottom.
-                    let room = max(60, IslandView.panelMaxHeight - 14 - cardHeight - stripHeight - composerHeight)
-                    ScrollView {
-                        rows(ctx.date)
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowsHeight = $0 }
-                    }
-                    .frame(height: rowsHeight == 0 ? nil : min(rowsHeight, room))
+                VStack(alignment: .leading, spacing: 0) { CardArea(model: model) }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0 }
+                // Panel padding is 4 top + 10 bottom.
+                let room = max(60, IslandView.panelMaxHeight - 14 - cardHeight - stripHeight)
+                ScrollView {
+                    rows(ctx.date)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowsHeight = $0 }
                 }
-                UsageStrip(usage: model.snapshot.usage, now: ctx.date)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stripHeight = $0 }
-                Composer(model: model, mode: .new)
-                    .padding(.top, 8)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height + 8 } action: { composerHeight = $0 }
+                .frame(height: rowsHeight == 0 ? nil : min(rowsHeight, room))
+                HStack(alignment: .center, spacing: 8) {
+                    UsageStrip(usage: model.snapshot.usage, now: ctx.date)
+                    Spacer(minLength: 0)
+                    NewChatButton(model: model).padding(.top, 8)
+                }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stripHeight = $0 }
             }
         }
     }
 
     var body: some View {
-        Group { if model.chat != nil { ChatView(model: model) } else { list } }
+        ZStack(alignment: .top) {
+            switch model.screen {
+            case .chat: ChatView(model: model).transition(.screen(forward: model.navForward))
+            case .compose: NewChatView(model: model).transition(.screen(forward: model.navForward))
+            case .list: list.transition(.screen(forward: model.navForward))
+            }
+        }
+        .animation(Motion.screen, value: model.screen)
+        .clipped()
         .padding(.horizontal, 8)
         .padding(.top, 4)
         .padding(.bottom, 10)

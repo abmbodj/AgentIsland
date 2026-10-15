@@ -30,6 +30,10 @@ Omitted until built (pill, session row, approval card, question card, handoff ca
 
 ### Chat (composer and conversation)
 
+**Entry.** The session list is status-only; a chat icon in its footer (trailing edge, beside the usage line) opens the new-chat screen: composer, Claude/Codex toggle and working folder, with Back to the list. With no sessions and no chats the panel opens on that screen by itself and keeps the "No agent sessions" prompt above the composer. Sending slides into the conversation; Back slides out.
+
+**Motion.** Screens slide 28pt with a fade, forward from the trailing side and back from the leading side, on ease-out-quint (about 340ms in, no bounce); the island's own shape springs to the new size underneath. Small changes (a message settling in, a tool row opening, the send/stop glyph swapping) use the same curve at about 220ms. Reduce Motion replaces slides with short cross-fades.
+
 The panel grows from 440 to 640 wide while a conversation is open and returns to the list on Back (⌘[, or Esc with an empty draft). The message column is 560 max and centered; the composer is pinned at the bottom. Your messages sit in a faint lifted block (white 8%); the agent's reply is plain text with no container. Tool calls are one compact collapsible row each. Code is a monospaced block with a Copy button. Errors and failed sessions use a triangle glyph and neutral text: amber stays "needs you" (a tool row waiting on approval) and green stays "finished", so neither appears in chat otherwise. Auto-scroll follows the stream until you scroll up; a "Latest" pill brings it back.
 
 ## 6. Do's and Don'ts
