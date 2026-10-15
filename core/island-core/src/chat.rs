@@ -361,6 +361,12 @@ impl Chats {
         }
     }
 
+    /// Forget the chat: stop its turn if one is running, then drop it and its transcript.
+    pub fn delete(&self, id: u64) {
+        self.stop(id);
+        self.list.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+    }
+
     pub fn transcript(&self, id: u64, since: u64) -> Result<Value, String> {
         let chat = self.get(id)?;
         let g = chat.lock();
