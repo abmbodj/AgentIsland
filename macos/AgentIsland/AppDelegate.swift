@@ -50,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if offerMoveToApplications() { return }
         rebuildIslands()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             if DisplayChoice.raw != "active" { self?.rebuildIslands() }
@@ -81,6 +82,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !Preferences.setupShown {
             showSetup()
         }
+    }
+
+    /// Running from the DMG or Downloads: offer a copy in /Applications so the login item and
+    /// updates have a stable home. True when this copy is quitting for the relaunch.
+    private func offerMoveToApplications() -> Bool {
+        #if DEBUG
+        return false
+        #else
+        let bundle = Bundle.main.bundleURL
+        let me = ProcessInfo.processInfo.processIdentifier
+        if let other = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "").first(where: { $0.processIdentifier != me }) {
+            other.activate() // the installed copy is already running: don't replace it underneath itself
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+            return true
+        }
+        let dest = URL(fileURLWithPath: "/Applications/Agent Island.app")
+        guard !bundle.path.hasPrefix("/Applications/"), !UserDefaults.standard.bool(forKey: "declinedMove") else { return false }
+        let alert = NSAlert()
+        alert.messageText = "Move Agent Island to Applications?"
+        alert.informativeText = "It keeps itself updated from there, and can open at login."
+        alert.addButton(withTitle: "Move to Applications")
+        alert.addButton(withTitle: "Not Now")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            UserDefaults.standard.set(true, forKey: "declinedMove")
+            return false
+        }
+        do {
+            try? FileManager.default.removeItem(at: dest)
+            try FileManager.default.copyItem(at: bundle, to: dest)
+        } catch {
+            let fail = NSAlert(error: error)
+            fail.runModal()
+            return false
+        }
+        NSWorkspace.shared.openApplication(at: dest, configuration: NSWorkspace.OpenConfiguration()) { _, _ in
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
+        return true
+        #endif
     }
 
     private var displayChoice = ""

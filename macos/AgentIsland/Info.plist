@@ -31,10 +31,12 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Abdoulaye Mbodj</string>
 	<key>SUFeedURL</key>
-	<string>https://github.com/abmbodj/AgentShelf2/releases/latest/download/appcast.xml</string>
+	<string>https://github.com/abmbodj/AgentIsland/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>$(SPARKLE_PUBLIC_KEY)</string>
 	<key>SUEnableAutomaticChecks</key>
 	<false/>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
 </dict>
 </plist>

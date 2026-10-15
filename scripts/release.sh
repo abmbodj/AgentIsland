@@ -1,11 +1,13 @@
 #!/bin/sh
 # Release: build → sign (hardened runtime) → notarize → staple → DMG → Sparkle appcast → GitHub release.
-# Usage: scripts/release.sh 0.1.0 [--dry-run]
+# Usage: scripts/release.sh 0.1.0 [--dry-run] [--unsigned]   (--unsigned allows a non-notarized build; never publish one)
 # Needs: a "Developer ID Application" cert (falls back to Apple Development, unnotarized),
 #        `xcrun notarytool store-credentials AgentIsland` for notarization,
 #        the Sparkle EdDSA key in the login keychain (account "agentisland").
 set -eu
-V="${1:?version}"; DRY="${2:-}"
+V="${1:?version}"; shift; DRY=""; UNSIGNED=""
+for a in "$@"; do case "$a" in --dry-run) DRY=1 ;; --unsigned) UNSIGNED=1 ;; *) echo "unknown flag $a" >&2; exit 2 ;; esac; done
+REPO=abmbodj/AgentIsland
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/build/release/$V"; rm -rf "$OUT"; mkdir -p "$OUT"
 SPARKLE="$ROOT/build/tools/sparkle/bin"
@@ -34,15 +36,21 @@ codesign --sign "$IDENTITY" --timestamp "$DMG" || true
 if [ "$IDENTITY" = "Developer ID Application" ] && xcrun notarytool history --keychain-profile AgentIsland >/dev/null 2>&1; then
   xcrun notarytool submit "$DMG" --keychain-profile AgentIsland --wait
   xcrun stapler staple "$DMG"
+elif [ -n "$UNSIGNED" ]; then
+  echo "WARNING: not notarized (--unsigned)."
 else
-  echo "WARNING: not notarized (needs Developer ID cert + notarytool profile 'AgentIsland')."
+  echo "Not notarized: needs a Developer ID cert and 'xcrun notarytool store-credentials AgentIsland'. Pass --unsigned to build anyway." >&2
+  exit 1
 fi
 
 mkdir -p "$OUT/appcast"; cp "$DMG" "$OUT/appcast/"
 "$SPARKLE/generate_appcast" --account agentisland \
-  --download-url-prefix "https://github.com/abmbodj/AgentShelf2/releases/download/v$V/" "$OUT/appcast"
+  --download-url-prefix "https://github.com/$REPO/releases/download/v$V/" "$OUT/appcast"
 cp "$OUT/appcast/appcast.xml" "$OUT/appcast.xml"
 echo "Built: $DMG"; echo "Appcast: $OUT/appcast.xml"
 
-if [ "$DRY" = "--dry-run" ]; then echo "Dry run: not publishing."; exit 0; fi
-gh release create "v$V" "$DMG" "$OUT/appcast.xml" --repo abmbodj/AgentShelf2 --title "Agent Island $V" --generate-notes
+# Versionless copy so .../releases/latest/download/AgentIsland.dmg is a stable download link.
+cp "$DMG" "$OUT/AgentIsland.dmg"
+if [ -n "$DRY" ]; then echo "Dry run: not publishing."; exit 0; fi
+if [ -n "$UNSIGNED" ]; then echo "Refusing to publish an --unsigned build." >&2; exit 1; fi
+gh release create "v$V" "$DMG" "$OUT/AgentIsland.dmg" "$OUT/appcast.xml" --repo "$REPO" --title "Agent Island $V" --generate-notes
