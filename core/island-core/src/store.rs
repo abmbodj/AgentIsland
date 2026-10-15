@@ -104,6 +104,8 @@ pub struct Session {
     /// When the current state began (turn start while Working).
     pub since: Millis,
     pub pending: Vec<Attention>,
+    /// Authoritative Codex proposals, distinct from its execution checklist.
+    pub plans: Vec<ObservedPlan>,
     pub subagents: Vec<Subagent>,
     /// The agent process, watched for exit.
     pub pid: Option<i32>,
@@ -124,6 +126,22 @@ pub struct Session {
     pub next_step: Option<Attention>,
     /// The desktop app offered to create a PR at the end of the turn: its recap, for the PR text.
     pub pr_offer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObservedPlan {
+    pub version: u64,
+    pub markdown: String,
+    pub status: &'static str,
+    #[serde(skip)]
+    item_id: String,
+    #[serde(skip)]
+    turn_id: String,
+    #[serde(skip)]
+    completed: bool,
+    #[serde(skip)]
+    attention_id: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -314,6 +332,7 @@ impl Store {
                     activity: String::new(),
                     since: now,
                     pending: vec![],
+                    plans: vec![],
                     subagents: vec![],
                     pid: None,
                     terminal: Terminal::default(),
@@ -359,6 +378,9 @@ impl Store {
             }
             "SessionEnd" => {
                 clear_pending(s, replies);
+                for plan in &mut s.plans {
+                    if matches!(plan.status, "writing" | "ready") { plan.status = "unavailable"; }
+                }
                 s.set(State::Ended, now);
             }
             "SubagentStart" => {
@@ -375,6 +397,13 @@ impl Store {
             }
             "UserPromptSubmit" => {
                 clear_pending(s, replies);
+                for plan in &mut s.plans {
+                    match plan.status {
+                        "ready" => plan.status = "superseded",
+                        "writing" => plan.status = "unavailable",
+                        _ => {}
+                    }
+                }
                 s.next_step = None;
                 s.pr_offer = None;
                 s.state = State::Working;
@@ -505,7 +534,9 @@ impl Store {
                 }
             }
             "Stop" => {
+                let proposals: Vec<_> = s.pending.iter().filter(|a| a.kind == "plan").cloned().collect();
                 clear_pending(s, replies);
+                s.pending.extend(proposals);
                 let running = p["background_tasks"]
                     .as_array()
                     .map_or(0, |t| t.iter().filter(|t| t["status"] == "running").count());
@@ -514,6 +545,8 @@ impl Store {
                 }
                 if let Some(a) = s.next_step.take() {
                     s.pending.push(a);
+                    s.set(State::NeedsInput, now);
+                } else if s.pending.iter().any(|a| a.kind == "plan") {
                     s.set(State::NeedsInput, now);
                 } else if running > 0 {
                     s.set(State::Working, now);
@@ -620,6 +653,76 @@ impl Store {
         }
         let thread = params["threadId"].as_str().unwrap_or_default().to_string();
         let Some(si) = self.sessions.iter().position(|s| s.agent == "codex" && s.id == thread) else { return };
+        if self.sessions[si].conn != Some(conn) { return; }
+        if method == "turn/started" {
+            let Some(turn_id) = params["turn"]["id"].as_str() else { return };
+            let s = &mut self.sessions[si];
+            for plan in s.plans.iter_mut().filter(|p| p.turn_id != turn_id) {
+                match plan.status {
+                    "ready" => plan.status = "superseded",
+                    "writing" => plan.status = "unavailable",
+                    _ => {}
+                }
+            }
+            s.pending.retain(|a| a.kind != "plan");
+            return;
+        }
+        // Progress checklists (turn/plan/updated) are deliberately not proposals.
+        if method == "item/plan/delta" || (matches!(method, "item/started" | "item/completed") && params["item"]["type"] == "plan") {
+            let item_id = if method == "item/plan/delta" { params["itemId"].as_str() } else { params["item"]["id"].as_str() };
+            let Some((item_id, turn_id)) = item_id.zip(params["turnId"].as_str()).filter(|(i, t)| !i.is_empty() && !t.is_empty()) else { return };
+            let s = &mut self.sessions[si];
+            let index = match s.plans.iter().position(|p| p.item_id == item_id && p.turn_id == turn_id) {
+                Some(i) => i,
+                None => {
+                    self.next_id += 1;
+                    let version = s.plans.last().map_or(1, |p| p.version + 1);
+                    for plan in &mut s.plans {
+                        if plan.status == "ready" { plan.status = "superseded"; }
+                    }
+                    s.pending.retain(|a| a.kind != "plan");
+                    s.plans.push(ObservedPlan { version, markdown: String::new(), status: "writing", item_id: item_id.into(), turn_id: turn_id.into(), completed: false, attention_id: self.next_id });
+                    s.plans.len() - 1
+                }
+            };
+            let plan = &mut s.plans[index];
+            if plan.status != "writing" { return; }
+            if method == "item/completed" {
+                plan.markdown = params["item"]["text"].as_str().unwrap_or_default().into();
+                plan.completed = true;
+            } else if !plan.completed {
+                if method == "item/plan/delta" {
+                    plan.markdown.push_str(params["delta"].as_str().unwrap_or_default());
+                } else if let Some(text) = params["item"]["text"].as_str() {
+                    plan.markdown = text.into();
+                }
+            }
+            s.last_event = now;
+            return;
+        }
+        if method == "turn/completed" {
+            let turn = &params["turn"];
+            let Some(turn_id) = turn["id"].as_str() else { return };
+            let s = &mut self.sessions[si];
+            let last_version = s.plans.last().map(|p| p.version);
+            for plan in s.plans.iter_mut().filter(|p| p.turn_id == turn_id && p.status == "writing") {
+                plan.status = if turn["status"] == "completed" && plan.completed && !plan.markdown.trim().is_empty() {
+                    if Some(plan.version) == last_version { "ready" } else { "superseded" }
+                } else { "unavailable" };
+                if plan.status == "ready" {
+                    let mut a = attention(plan.attention_id, "CodexPlan", &json!({"plan":plan.markdown}), now, None);
+                    a.kind = "plan".into();
+                    a.title = "Review plan".into();
+                    a.detail = plan.markdown.clone();
+                    a.held = false;
+                    a.can_allow_session = false;
+                    s.pending.push(a);
+                }
+            }
+            if s.plans.iter().any(|p| p.turn_id == turn_id && p.status == "ready") { s.set(State::NeedsInput, now); }
+            s.last_event = now;
+            return;
+        }
         if method == "serverRequest/resolved" {
             let rid = &params["requestId"];
             let s = &mut self.sessions[si];
@@ -706,6 +809,9 @@ impl Store {
         for s in self.sessions.iter_mut().filter(|s| s.conn == Some(conn)) {
             s.inline = false;
             s.conn = None;
+            for plan in &mut s.plans {
+                if plan.status == "writing" { plan.status = "unavailable"; }
+            }
         }
         for s in &mut self.sessions {
             for a in &mut s.pending {

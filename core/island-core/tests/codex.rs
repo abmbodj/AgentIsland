@@ -20,6 +20,71 @@ fn attached() -> Store {
     s
 }
 
+fn plan_event(method: &str, item: Value) -> Value {
+    json!({"method": method, "params": {"threadId": THREAD, "turnId": "plan-turn", "item": item}})
+}
+
+#[test]
+fn codex_proposals_stream_without_attention_then_use_authoritative_completed_text() {
+    let mut s = attached();
+    s.appserver_message(CONN, &plan_event("item/started", json!({"id":"p1","type":"plan","text":""})), T0 + 1);
+    s.appserver_message(CONN, &json!({"method":"item/plan/delta","params":{"threadId":THREAD,"turnId":"plan-turn","itemId":"p1","delta":"# Draft"}}), T0 + 2);
+    let snapshot = serde_json::to_value(s.snapshot()).unwrap();
+    assert_eq!(snapshot["sessions"][0]["plans"][0]["markdown"], "# Draft");
+    assert_eq!(snapshot["sessions"][0]["plans"][0]["status"], "writing");
+    assert!(only(&s).pending.is_empty(), "streaming does not ask for a decision");
+    let source = format!("# Final proposal\n{}", "Full text. ".repeat(1000));
+    let done = plan_event("item/completed", json!({"id":"p1","type":"plan","text":source}));
+    s.appserver_message(CONN, &done, T0 + 3);
+    s.appserver_message(CONN, &done, T0 + 4);
+    assert!(only(&s).pending.is_empty(), "wait for successful turn completion");
+    s.appserver_message(CONN, &json!({"method":"turn/completed","params":{"threadId":THREAD,"turn":{"id":"plan-turn","status":"completed"}}}), T0 + 5);
+    assert_eq!(only(&s).pending.len(), 1);
+    let attention = only(&s).pending[0].clone();
+    assert_eq!(attention.kind, "plan");
+    assert_eq!(attention.detail, source);
+    assert!(!attention.held && !attention.can_allow_session);
+    assert_eq!(only(&s).state, State::NeedsInput);
+    s.handle(&codex("Stop", json!({})), T0 + 6);
+    assert_eq!(only(&s).pending[0].id, attention.id, "late Stop must not remove the review prompt");
+    s.handle(&codex("UserPromptSubmit", json!({})), T0 + 7);
+    assert!(only(&s).pending.is_empty());
+    let snapshot = serde_json::to_value(s.snapshot()).unwrap();
+    assert_eq!(snapshot["sessions"][0]["plans"][0]["status"], "superseded");
+}
+
+#[test]
+fn codex_checklists_failed_turns_and_foreign_connections_cannot_create_ready_proposals() {
+    let mut s = attached();
+    s.appserver_message(CONN, &json!({"method":"turn/plan/updated","params":{"threadId":THREAD,"turnId":"plan-turn","plan":[{"step":"Run tests","status":"pending"}]}}), T0 + 1);
+    let done = plan_event("item/completed", json!({"id":"p1","type":"plan","text":"# Proposal"}));
+    s.appserver_message(CONN + 1, &done, T0 + 2);
+    assert!(only(&s).pending.is_empty());
+    let snapshot = serde_json::to_value(s.snapshot()).unwrap();
+    assert_eq!(snapshot["sessions"][0]["plans"], json!([]));
+    s.appserver_message(CONN, &done, T0 + 3);
+    s.appserver_message(CONN, &json!({"method":"turn/completed","params":{"threadId":THREAD,"turn":{"id":"plan-turn","status":"interrupted"}}}), T0 + 4);
+    assert!(only(&s).pending.is_empty());
+    let snapshot = serde_json::to_value(s.snapshot()).unwrap();
+    assert_eq!(snapshot["sessions"][0]["plans"][0]["status"], "unavailable");
+}
+
+#[test]
+fn codex_new_turn_and_disconnect_invalidate_old_proposal_streams() {
+    let mut s = attached();
+    s.appserver_message(CONN, &plan_event("item/started", json!({"id":"p1","type":"plan","text":"# Draft"})), T0 + 1);
+    s.appserver_message(CONN, &json!({"method":"turn/started","params":{"threadId":THREAD,"turn":{"id":"new-turn"}}}), T0 + 2);
+    s.appserver_message(CONN, &plan_event("item/completed", json!({"id":"p1","type":"plan","text":"# Stale"})), T0 + 3);
+    s.appserver_message(CONN, &json!({"method":"turn/completed","params":{"threadId":THREAD,"turn":{"id":"plan-turn","status":"completed"}}}), T0 + 4);
+    assert!(only(&s).pending.is_empty());
+    let snapshot = serde_json::to_value(s.snapshot()).unwrap();
+    assert_eq!(snapshot["sessions"][0]["plans"][0]["status"], "unavailable");
+    s.appserver_message(CONN, &json!({"method":"item/started","params":{"threadId":THREAD,"turnId":"new-turn","item":{"id":"p2","type":"plan","text":"# New"}}}), T0 + 5);
+    s.appserver_closed(CONN);
+    let snapshot = serde_json::to_value(s.snapshot()).unwrap();
+    assert_eq!(snapshot["sessions"][0]["plans"][1]["status"], "unavailable");
+}
+
 #[test]
 fn codex_sessions_track_like_claude_ones() {
     let mut s = Store::default();
