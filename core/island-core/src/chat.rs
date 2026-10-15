@@ -43,6 +43,8 @@ pub struct Transcript {
     pub session_id: Option<String>,
     /// The Claude message currently streaming, to key its text blocks.
     msg: String,
+    /// Codex item IDs restart in each exec subprocess, even when resuming a session.
+    turn: u64,
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -194,7 +196,8 @@ impl Transcript {
     /// Fold one line of `codex exec --json`. Codex reports whole items, not token deltas.
     pub fn apply_codex(&mut self, v: &Value) -> bool {
         let item = &v["item"];
-        let id = item["id"].as_str().unwrap_or_default();
+        let key = format!("codex:{}:{}", self.turn, item["id"].as_str().unwrap_or_default());
+        let id = key.as_str();
         match (v["type"].as_str(), item["type"].as_str()) {
             (Some("thread.started"), _) => self.session_id = v["thread_id"].as_str().map(str::to_string),
             (Some("item.completed"), Some("agent_message")) => self.set_text(id.into(), item["text"].as_str().unwrap_or_default(), false),
@@ -504,6 +507,7 @@ impl Chats {
             if g.status == Status::Running {
                 return Err("The agent is still working.".into());
             }
+            g.transcript.turn += 1;
             g.transcript.user(text);
             g.error = None;
             g.stopping = false;

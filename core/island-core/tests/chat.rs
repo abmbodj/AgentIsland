@@ -337,3 +337,29 @@ fn stale_launcher_callbacks_cannot_change_a_later_attempt() {
     assert_eq!(chats.transcript(id, 0).unwrap()["handoff"]["status"], "opened");
     assert!(chats.send(&tools, id, "still read only").is_err());
 }
+
+#[test]
+fn codex_resumed_turns_keep_messages_and_tools_when_item_ids_repeat() {
+    let script = r#"if [ -f "$0.seen" ]; then text=MARKER; else text=Saved; touch "$0.seen"; fi
+echo '{"type":"thread.started","thread_id":"native-history"}'
+echo '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"'$text'"}}'
+echo '{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"echo '$text'"}}'
+echo '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"echo '$text'","aggregated_output":"'$text'","exit_code":0}}'
+echo '{"type":"turn.completed"}'"#;
+    let (tools, root) = fixture("codex-repeat-ids", &[("codex", script)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "codex", root.to_str().unwrap(), "remember marker").unwrap();
+    let first = wait_for(&chats, id, "idle");
+    chats.send(&tools, id, "recall marker").unwrap();
+    let t = wait_for(&chats, id, "idle");
+    assert_eq!(kinds(&t), ["user", "assistant", "tool", "user", "assistant", "tool"]);
+    assert_eq!(t["entries"][1]["text"], "Saved");
+    assert_eq!(t["entries"][4]["text"], "MARKER");
+    assert_eq!(t["entries"][2]["output"], "Saved");
+    assert_eq!(t["entries"][5]["output"], "MARKER");
+    assert_eq!(t["entries"][2], first["entries"][2]);
+    assert_eq!(t["sessionId"], "native-history");
+    chats.request_handoff(id, "terminal").unwrap();
+    assert_eq!(chats.claim_handoffs(&tools)[0]["sessionId"], "native-history");
+    assert_eq!(chats.transcript(id, 0).unwrap()["entries"], t["entries"]);
+}
