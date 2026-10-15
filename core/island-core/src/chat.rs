@@ -244,12 +244,22 @@ impl Status {
     }
 }
 
+#[derive(Clone, Serialize)]
+struct Handoff {
+    target: String,
+    status: &'static str,
+    #[serde(skip)]
+    reopened: bool,
+}
+
 struct State {
     transcript: Transcript,
     status: Status,
     error: Option<String>,
     pid: Option<i32>,
     stopping: bool,
+    handoff: Option<Handoff>,
+    handoff_error: Option<String>,
 }
 
 pub struct Chat {
@@ -270,6 +280,7 @@ impl Chat {
         json!({
             "id": self.id, "agent": self.agent, "cwd": self.cwd, "title": self.title,
             "status": g.status.name(), "sessionId": g.transcript.session_id, "error": g.error,
+            "handoff": g.handoff, "handoffError": g.handoff_error,
         })
     }
 }
@@ -325,10 +336,10 @@ impl Chats {
             agent: agent.into(),
             cwd: cwd.into(),
             title,
-            state: Mutex::new(State { transcript: Transcript::default(), status: Status::Idle, error: None, pid: None, stopping: false }),
+            state: Mutex::new(State { transcript: Transcript::default(), status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None }),
         });
         self.list.lock().unwrap_or_else(|e| e.into_inner()).insert(id, chat.clone());
-        Self::turn(tools, &chat, text);
+        Self::turn(tools, &chat, text)?;
         Ok(id)
     }
 
@@ -341,10 +352,98 @@ impl Chats {
         if text.trim().is_empty() {
             return Err("Write a message first.".into());
         }
-        if chat.lock().status == Status::Running {
-            return Err("The agent is still working.".into());
+        Self::turn(tools, &chat, text)
+    }
+
+    pub fn request_handoff(&self, id: u64, target: &str) -> Result<(), String> {
+        let chat = self.get(id)?;
+        match target {
+            "terminal" | "iterm" | "ghostty" => {},
+            "claudeDesktop" if chat.agent == "claude" => {},
+            "codexDesktop" if chat.agent == "codex" => {},
+            _ => return Err("That destination is not supported for this agent.".into()),
         }
-        Self::turn(tools, &chat, text);
+        let mut g = chat.lock();
+        let reopened = if let Some(h) = &g.handoff {
+            if h.status != "opened" || h.target != target {
+                return Err("A handoff is already active for this chat.".into());
+            }
+            true
+        } else { false };
+        g.handoff = Some(Handoff { target: target.into(), status: "queued", reopened });
+        g.handoff_error = None;
+        Ok(())
+    }
+
+    pub fn cancel_handoff(&self, id: u64) -> Result<(), String> {
+        let chat = self.get(id)?;
+        let mut g = chat.lock();
+        let h = g.handoff.as_ref().ok_or("No handoff is queued.")?;
+        if h.status != "queued" { return Err("Only a queued handoff can be cancelled.".into()); }
+        Self::restore_handoff(&mut g);
+        Ok(())
+    }
+
+    // A failed or cancelled reopen must never make the original notch transcript writable.
+    fn restore_handoff(g: &mut State) {
+        if g.handoff.as_ref().is_some_and(|h| h.reopened) {
+            g.handoff.as_mut().unwrap().status = "opened";
+        } else {
+            g.handoff = None;
+        }
+    }
+
+    pub fn claim_handoffs(&self, tools: &Tools) -> Value {
+        let list = self.list.lock().unwrap_or_else(|e| e.into_inner());
+        let mut claims = Vec::new();
+        for chat in list.values() {
+            let mut g = chat.lock();
+            if g.status == Status::Running || !g.handoff.as_ref().is_some_and(|h| h.status == "queued") {
+                continue;
+            }
+            let resolved = (|| {
+                let session = g.transcript.session_id.as_deref().filter(|s| !s.trim().is_empty())
+                    .ok_or_else(|| "The agent did not provide a native session to resume.".to_string())?;
+                if !std::path::Path::new(&chat.cwd).is_dir() {
+                    return Err(format!("{} is no longer a folder.", chat.cwd));
+                }
+                let bin = tools.find(&chat.agent).ok_or_else(|| format!("Could not find {} on this Mac.", chat.agent))?;
+                let bin = std::fs::canonicalize(bin).map_err(|e| format!("Could not resolve the agent executable: {e}"))?;
+                use std::os::unix::fs::PermissionsExt;
+                if std::fs::metadata(&bin).map_err(|e| e.to_string())?.permissions().mode() & 0o111 == 0 {
+                    return Err(format!("{} is not executable.", bin.display()));
+                }
+                Ok(json!({"id": chat.id, "agent": chat.agent, "cwd": chat.cwd,
+                    "sessionId": session, "target": g.handoff.as_ref().unwrap().target,
+                    "bin": bin, "path": crate::pr::search_path(&bin).to_string_lossy()}))
+            })();
+            match resolved {
+                Ok(claim) => {
+                    g.handoff.as_mut().unwrap().status = "launching";
+                    claims.push(claim);
+                }
+                Err(error) => {
+                    Self::restore_handoff(&mut g);
+                    g.handoff_error = Some(error);
+                }
+            }
+        }
+        Value::Array(claims)
+    }
+
+    pub fn finish_handoff(&self, id: u64, error: Option<&str>) -> Result<(), String> {
+        let chat = self.get(id)?;
+        let mut g = chat.lock();
+        if !g.handoff.as_ref().is_some_and(|h| h.status == "launching") {
+            return Err("No handoff is launching.".into());
+        }
+        if let Some(error) = error {
+            Self::restore_handoff(&mut g);
+            g.handoff_error = Some(error.into());
+        } else {
+            g.handoff.as_mut().unwrap().status = "opened";
+            g.handoff_error = None;
+        }
         Ok(())
     }
 
@@ -372,6 +471,7 @@ impl Chats {
         let g = chat.lock();
         Ok(json!({
             "status": g.status.name(), "error": g.error, "sessionId": g.transcript.session_id,
+            "handoff": g.handoff, "handoffError": g.handoff_error,
             "rev": g.transcript.rev, "entries": g.transcript.since(since),
         }))
     }
@@ -387,9 +487,15 @@ impl Chats {
         ids.into_iter().for_each(|id| self.stop(id));
     }
 
-    fn turn(tools: &Tools, chat: &Arc<Chat>, text: &str) {
+    fn turn(tools: &Tools, chat: &Arc<Chat>, text: &str) -> Result<(), String> {
         let session = {
             let mut g = chat.lock();
+            if g.handoff.is_some() {
+                return Err("Continue this chat in its handoff destination, or cancel the queued handoff.".into());
+            }
+            if g.status == Status::Running {
+                return Err("The agent is still working.".into());
+            }
             g.transcript.user(text);
             g.error = None;
             g.stopping = false;
@@ -399,7 +505,7 @@ impl Chats {
         let spawned = command(tools, &chat.agent, &chat.cwd, text, session.as_deref()).and_then(|mut c| c.spawn().map_err(|e| e.to_string()));
         let mut child = match spawned {
             Ok(c) => c,
-            Err(e) => return Self::fail(chat, &e),
+            Err(e) => { Self::fail(chat, &e); return Ok(()); },
         };
         {
             let mut g = chat.lock();
@@ -440,6 +546,7 @@ impl Chats {
                 g.status = Status::Idle;
             }
         });
+        Ok(())
     }
 
     fn fail(chat: &Chat, msg: &str) {

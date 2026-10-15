@@ -158,3 +158,115 @@ fn delete_kills_a_running_turn_and_forgets_the_chat() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+#[test]
+fn handoff_waits_for_exit_and_is_claimed_once() {
+    let script = "echo '{\"type\":\"result\",\"session_id\":\"native-session\",\"is_error\":false}'\nexec 1>&-\nwhile [ ! -f \"$0.release\" ]; do sleep 0.02; done";
+    let (tools, root) = fixture("handoff-queue", &[("claude", script)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "remember this").unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    while chats.transcript(id, 0).unwrap()["sessionId"].is_null() {
+        assert!(Instant::now() < end, "native session never arrived");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    chats.request_handoff(id, "terminal").unwrap();
+    chats.cancel_handoff(id).unwrap();
+    assert!(chats.transcript(id, 0).unwrap()["handoff"].is_null());
+    chats.request_handoff(id, "terminal").unwrap();
+    assert_eq!(chats.transcript(id, 0).unwrap()["handoff"]["status"], "queued");
+    assert!(chats.send(&tools, id, "blocked").is_err());
+    assert_eq!(chats.claim_handoffs(&tools), serde_json::json!([]));
+    std::fs::write(root.join("bin/claude.release"), "").unwrap();
+    let before = wait_for(&chats, id, "idle");
+    let claims = chats.claim_handoffs(&tools);
+    assert_eq!(claims[0]["sessionId"], "native-session");
+    assert_eq!(claims[0]["cwd"], root.to_str().unwrap());
+    assert_eq!(claims[0]["bin"], std::fs::canonicalize(root.join("bin/claude")).unwrap().to_str().unwrap());
+    assert!(claims[0]["path"].as_str().unwrap().contains(std::fs::canonicalize(root.join("bin")).unwrap().to_str().unwrap()));
+    assert_eq!(chats.claim_handoffs(&tools), serde_json::json!([]));
+    assert!(chats.cancel_handoff(id).is_err());
+    chats.finish_handoff(id, None).unwrap();
+    let after = chats.transcript(id, 0).unwrap();
+    assert_eq!(after["entries"], before["entries"]);
+    assert_eq!(after["handoff"]["status"], "opened");
+    assert!(chats.send(&tools, id, "blocked").is_err());
+    assert!(chats.request_handoff(id, "iterm").is_err());
+    chats.request_handoff(id, "terminal").unwrap();
+    assert_eq!(chats.claim_handoffs(&tools).as_array().unwrap().len(), 1);
+    chats.finish_handoff(id, Some("could not reopen")).unwrap();
+    assert_eq!(chats.list()[0]["handoff"]["status"], "opened");
+    assert!(chats.send(&tools, id, "still blocked").is_err());
+}
+
+#[test]
+fn handoff_cancellation_and_failure_restore_replies() {
+    let (tools, root) = fixture("handoff-recover", &[("claude", CLAUDE)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "hello").unwrap();
+    wait_for(&chats, id, "idle");
+    assert!(chats.request_handoff(id, "codexDesktop").is_err());
+    assert!(chats.request_handoff(id, "unknown").is_err());
+    assert!(chats.finish_handoff(id, None).is_err());
+    chats.request_handoff(id, "claudeDesktop").unwrap();
+    chats.cancel_handoff(id).unwrap();
+    assert!(chats.transcript(id, 0).unwrap()["handoff"].is_null());
+    chats.send(&tools, id, "again").unwrap();
+    wait_for(&chats, id, "idle");
+    chats.request_handoff(id, "ghostty").unwrap();
+    chats.claim_handoffs(&tools);
+    assert!(chats.send(&tools, id, "launching").is_err());
+    chats.finish_handoff(id, Some("Ghostty could not open")).unwrap();
+    let t = chats.transcript(id, 0).unwrap();
+    assert!(t["handoff"].is_null());
+    assert_eq!(t["handoffError"], "Ghostty could not open");
+    chats.send(&tools, id, "recovered").unwrap();
+    wait_for(&chats, id, "idle");
+    chats.request_handoff(id, "terminal").unwrap();
+    chats.delete(id);
+    assert_eq!(chats.claim_handoffs(&tools), serde_json::json!([]));
+    assert!(chats.request_handoff(id, "terminal").is_err());
+    assert!(chats.finish_handoff(id, None).is_err());
+}
+
+#[test]
+fn handoff_claim_validates_session_executable_and_folder_at_claim_time() {
+    let chats = Chats::default();
+    let (tools, root) = fixture("handoff-session", &[("codex", "echo '{\"type\":\"turn.completed\"}'")]);
+    let id = chats.start(&tools, "codex", root.to_str().unwrap(), "hello").unwrap();
+    wait_for(&chats, id, "idle");
+    chats.request_handoff(id, "codexDesktop").unwrap();
+    assert_eq!(chats.claim_handoffs(&tools), serde_json::json!([]));
+    let t = chats.transcript(id, 0).unwrap();
+    assert!(t["handoff"].is_null());
+    assert!(t["handoffError"].as_str().unwrap().contains("session"));
+    for missing in ["binary", "folder", "permissions"] {
+        let (tools, root) = fixture(&format!("handoff-{missing}"), &[("claude", CLAUDE)]);
+        let id = chats.start(&tools, "claude", root.to_str().unwrap(), "hello").unwrap();
+        wait_for(&chats, id, "idle");
+        chats.request_handoff(id, "iterm").unwrap();
+        match missing {
+            "binary" => std::fs::remove_file(root.join("bin/claude")).unwrap(),
+            "folder" => std::fs::remove_dir_all(&root).unwrap(),
+            _ => std::fs::set_permissions(root.join("bin/claude"), std::fs::Permissions::from_mode(0o644)).unwrap(),
+        }
+        assert_eq!(chats.claim_handoffs(&tools), serde_json::json!([]));
+        let t = chats.transcript(id, 0).unwrap();
+        assert!(t["handoff"].is_null());
+        assert!(!t["handoffError"].as_str().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn concurrent_claims_launch_a_chat_only_once() {
+    let (tools, root) = fixture("handoff-concurrent", &[("claude", CLAUDE)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "hello").unwrap();
+    wait_for(&chats, id, "idle");
+    chats.request_handoff(id, "terminal").unwrap();
+    std::thread::scope(|scope| {
+        let a = scope.spawn(|| chats.claim_handoffs(&tools).as_array().unwrap().len());
+        let b = scope.spawn(|| chats.claim_handoffs(&tools).as_array().unwrap().len());
+        assert_eq!(a.join().unwrap() + b.join().unwrap(), 1);
+    });
+}

@@ -486,6 +486,10 @@ impl Core {
                 self.chats.start(&self.tools(), s("agent"), s("cwd"), s("text")).map(|id| json!({"id": id}))
             }
             "chatSend" => self.chats.send(&self.tools(), req["id"].as_u64().unwrap_or_default(), req["text"].as_str().unwrap_or_default()).map(|_| Value::Null),
+            "chatHandoff" => self.chats.request_handoff(req["id"].as_u64().unwrap_or_default(), req["target"].as_str().unwrap_or_default()).map(|_| Value::Null),
+            "chatHandoffCancel" => self.chats.cancel_handoff(req["id"].as_u64().unwrap_or_default()).map(|_| Value::Null),
+            "chatHandoffClaim" => Ok(self.chats.claim_handoffs(&self.tools())),
+            "chatHandoffFinish" => self.chats.finish_handoff(req["id"].as_u64().unwrap_or_default(), req["error"].as_str()).map(|_| Value::Null),
             "chatStop" => {
                 self.chats.stop(req["id"].as_u64().unwrap_or_default());
                 Ok(Value::Null)
