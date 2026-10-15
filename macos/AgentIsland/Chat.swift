@@ -51,6 +51,10 @@ struct TurnSettings: Codable, Equatable {
     var fast = false
     /// The model's display name, for chips and captions.
     var name: String?
+    /// Claude Ultracode; optional so choices saved before it existed still decode (nil is off).
+    var ultracode: Bool?
+
+    var isUltracode: Bool { ultracode == true }
 
     var dict: [String: Any] {
         (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(self))) as? [String: Any] ?? [:]
@@ -65,6 +69,8 @@ struct ModelOption: Decodable, Equatable, Identifiable {
     var fast: Bool
     /// The newest of its family; older pinned versions sit in a submenu.
     var latest = true
+    /// Claude: Ultracode can take effect with this model (the CLI's own `ultracodeAvailable`).
+    var ultracode = false
 }
 
 struct AgentOptions: Decodable, Equatable {
@@ -117,8 +123,10 @@ extension TurnSettings {
         if agent == "claude" {
             if s.mode == "auto", let m, !m.auto { s.mode = nil }
             if s.fast, !(m?.fast ?? false) { s.fast = false }
+            if s.isUltracode, !(m?.ultracode ?? false) { s.ultracode = nil }
         } else {
             s.fast = false
+            s.ultracode = nil
             if s.mode == "workspace-write" { s.mode = nil } // Codex's default
         }
         return s
@@ -128,7 +136,7 @@ extension TurnSettings {
     /// Assert-based check of the fitting rules; runs once at launch in Debug builds.
     static func selfCheck() {
         let opts = AgentOptions(models: [
-            ModelOption(id: "opus", name: "Opus 5.5", efforts: ["low", "medium", "high", "xhigh", "max"], auto: true, fast: true),
+            ModelOption(id: "opus", name: "Opus 5.5", efforts: ["low", "medium", "high", "xhigh", "max"], auto: true, fast: true, ultracode: true),
             ModelOption(id: "old", name: "Opus 4.6", efforts: ["low", "medium", "high", "max"], auto: false, fast: false),
         ], error: nil, loading: false)
         var s = TurnSettings(model: "old", effort: "xhigh", mode: "auto", fast: true)
@@ -138,6 +146,8 @@ extension TurnSettings {
         let loading = AgentOptions(models: [], error: nil, loading: true)
         assert(TurnSettings(model: "gone").fitted(to: loading, agent: "claude").model == "gone", "an empty list keeps choices")
         assert(TurnSettings(fast: true).fitted(to: opts, agent: "codex").fast == false, "fast never reaches Codex")
+        assert(TurnSettings(model: "opus", ultracode: true).fitted(to: opts, agent: "claude").isUltracode, "Ultracode stays where available")
+        assert(!TurnSettings(model: "old", ultracode: true).fitted(to: opts, agent: "claude").isUltracode, "and drops where it isn't")
     }
     #endif
 }

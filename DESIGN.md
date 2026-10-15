@@ -43,5 +43,6 @@ The panel grows from 440 to 640 wide while a conversation is open and returns to
 - Do use spring motion ~200–300 ms, critically damped for routine changes; cross-fade under Reduce Motion.
 - Don't use amber or green for anything except their one meaning; usage ≥90% is bold, not amber.
 - Do identify agents by their official marks: the Claude spark in brand clay (#D97757, the only non-signal hue, used nowhere else) and the Codex knot in off-white. In rows the state glyph sits on the mark as a corner badge.
+- Do use Claude Code's own Ultracode violet (#d0b4ff) only on the composer's model chip while Ultracode is on: a tinted fill and hairline that breathe slowly (about 1.8 s, ease in-out), held still under Reduce Motion. It marks a mode the user chose, never a status, so it appears nowhere else.
 - Don't add cards inside cards, metric tiles, gradients, or glow.
 - Don't use em dashes in UI copy.
