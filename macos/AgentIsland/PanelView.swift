@@ -44,7 +44,7 @@ final class PanelModel: ObservableObject {
     /// The new-chat screen was opened on purpose (it also shows by itself when there is nothing else to show).
     @Published var composing = false
     /// Which way the next screen change slides; set before the change so the outgoing screen uses it too.
-    var navForward = true
+    @Published var navForward = true
     @Published var composeError: String?
     var rev = 0
     var pollTimer: Timer?
