@@ -27,6 +27,9 @@ pub struct Settings {
     pub fast: bool,
     /// The model's display name, for transcript captions only.
     pub name: Option<String>,
+    /// Claude: Ultracode (standing dynamic-workflow orchestration at any effort level).
+    #[serde(default)]
+    pub ultracode: bool,
 }
 
 impl Settings {
@@ -41,8 +44,8 @@ impl Settings {
         if let Some(m) = self.mode.as_deref().filter(|m| !modes.contains(m)) {
             return Err(format!("\"{m}\" is not a mode the island can run {agent} in."));
         }
-        if self.fast && agent != "claude" {
-            return Err("Fast mode is only available for Claude.".into());
+        if (self.fast || self.ultracode) && agent != "claude" {
+            return Err("Fast mode and Ultracode are only available for Claude.".into());
         }
         Ok(())
     }
@@ -58,7 +61,11 @@ impl Settings {
             if let Some(m) = &self.model { flag("--model", m.clone()) }
             if let Some(e) = &self.effort { flag("--effort", e.clone()) }
             if let Some(p) = &self.mode { flag("--permission-mode", p.clone()) }
-            if self.fast { flag("--settings", "{\"fastMode\":true}".into()) }
+            // One --settings layer carries both, so neither replaces the other.
+            let mut extra = serde_json::Map::new();
+            if self.fast { extra.insert("fastMode".into(), true.into()); }
+            if self.ultracode { extra.insert("ultracode".into(), true.into()); }
+            if !extra.is_empty() { flag("--settings", Value::Object(extra).to_string()) }
         } else {
             if let Some(m) = &self.model { flag("-m", m.clone()) }
             if let Some(e) = &self.effort { flag("-c", format!("model_reasoning_effort=\"{e}\"")) }
@@ -87,7 +94,8 @@ impl Settings {
             c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
         });
         let fast = self.fast.then(|| "Fast".to_string());
-        [mode, model, effort, fast].into_iter().flatten().collect::<Vec<_>>().join(" · ")
+        let ultracode = self.ultracode.then(|| "Ultracode".to_string());
+        [mode, model, effort, fast, ultracode].into_iter().flatten().collect::<Vec<_>>().join(" · ")
     }
 }
 

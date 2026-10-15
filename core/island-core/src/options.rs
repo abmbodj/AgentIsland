@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::process::CommandExt;
-use std::process::{ChildStdout, Command, Stdio};
+use std::process::{ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -22,6 +22,8 @@ pub struct ModelOption {
     pub fast: bool,
     /// The newest of its family ("Opus 5.5" over a pinned "Opus 4.6"); older ones go in a submenu.
     pub latest: bool,
+    /// Claude: Ultracode can take effect with this model in an island chat (the CLI's `ultracodeAvailable`).
+    pub ultracode: bool,
 }
 
 fn strings(v: &Value) -> Vec<String> {
@@ -49,6 +51,7 @@ pub fn parse_claude(response: &Value) -> Vec<ModelOption> {
                 auto: m["supportsAutoMode"] == true,
                 fast: m["supportsFastMode"] == true,
                 latest: true,
+                ultracode: false,
             })
         })
         .collect();
@@ -90,6 +93,7 @@ pub fn parse_codex(v: &Value) -> Vec<ModelOption> {
                 fast: false,
                 // Codex lists only what its own picker shows.
                 latest: true,
+                ultracode: false,
             })
         })
         .collect()
@@ -98,22 +102,20 @@ pub fn parse_codex(v: &Value) -> Vec<ModelOption> {
 const AGENTS: [&str; 2] = ["claude", "codex"];
 const STALE: Duration = Duration::from_secs(3600);
 const TIMEOUT: Duration = Duration::from_secs(20);
-const INITIALIZE: &str = "{\"type\":\"control_request\",\"request_id\":\"island-options\",\"request\":{\"subtype\":\"initialize\"}}\n";
 
-/// Run `agent args`, write `input`, and hand stdout to `read`; the process group is killed afterwards
+/// Run `agent args` and hand its stdout and stdin to `read`; the process group is killed afterwards
 /// (Claude keeps waiting for more input) or at `timeout`.
-fn run(tools: &Tools, agent: &str, args: &[&str], input: &str, timeout: Duration,
-       read: fn(BufReader<ChildStdout>) -> Result<Vec<ModelOption>, String>) -> Result<Vec<ModelOption>, String> {
+fn run(tools: &Tools, agent: &str, args: &[&str], timeout: Duration,
+       read: fn(BufReader<ChildStdout>, ChildStdin) -> Result<Vec<ModelOption>, String>) -> Result<Vec<ModelOption>, String> {
     let bin = tools.find(agent).ok_or_else(|| format!("Could not find {agent} on this Mac."))?;
     let mut child = Command::new(&bin).args(args).current_dir(std::env::temp_dir())
         .env("PATH", crate::pr::search_path(&bin))
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0)
         .spawn().map_err(|e| e.to_string())?;
     let pid = child.id() as i32;
-    let _ = child.stdin.as_mut().map(|s| s.write_all(input.as_bytes()));
-    let out = BufReader::new(child.stdout.take().unwrap());
+    let (out, input) = (BufReader::new(child.stdout.take().unwrap()), child.stdin.take().unwrap());
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || { let _ = tx.send(read(out)); });
+    std::thread::spawn(move || { let _ = tx.send(read(out, input)); });
     let r = rx.recv_timeout(timeout).unwrap_or_else(|_| Err(format!("{agent} took too long to list its models.")));
     // Not reaped yet, so the pid can't have been reused.
     unsafe { libc::kill(-pid, libc::SIGKILL) };
@@ -121,20 +123,40 @@ fn run(tools: &Tools, agent: &str, args: &[&str], input: &str, timeout: Duration
     r
 }
 
-fn read_claude(out: BufReader<ChildStdout>) -> Result<Vec<ModelOption>, String> {
-    for line in out.lines().map_while(Result::ok) {
-        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
-        if v["type"] == "control_response" {
-            if v["response"]["subtype"] != "success" {
-                return Err(v["response"]["error"].as_str().unwrap_or("Claude Code refused to list its models.").into());
-            }
-            return Ok(parse_claude(&v["response"]["response"]));
-        }
-    }
-    Err("Claude Code exited without listing its models.".into())
+fn control(id: &str, request: Value) -> String {
+    json!({"type": "control_request", "request_id": id, "request": request}).to_string() + "\n"
 }
 
-fn read_codex(mut out: BufReader<ChildStdout>) -> Result<Vec<ModelOption>, String> {
+/// The models from `initialize`, then, per model, whether Ultracode can take effect: switch the probe
+/// session to it and read `get_settings` (the CLI asks hosts to offer Ultracode only while that holds).
+fn read_claude(out: BufReader<ChildStdout>, mut input: ChildStdin) -> Result<Vec<ModelOption>, String> {
+    input.write_all(control("island-options", json!({"subtype": "initialize"})).as_bytes()).map_err(|e| e.to_string())?;
+    let mut lines = out.lines().map_while(Result::ok).filter_map(|l| serde_json::from_str::<Value>(&l).ok())
+        .filter(|v| v["type"] == "control_response");
+    let v = lines.next().ok_or("Claude Code exited without listing its models.")?;
+    if v["response"]["subtype"] != "success" {
+        return Err(v["response"]["error"].as_str().unwrap_or("Claude Code refused to list its models.").into());
+    }
+    let mut models = parse_claude(&v["response"]["response"]);
+    for (i, m) in models.iter_mut().enumerate() {
+        let id = format!("island-settings-{i}");
+        let ask = control("island-model", json!({"subtype": "apply_flag_settings", "settings": {"model": m.id}}))
+            + &control(&id, json!({"subtype": "get_settings"}));
+        if input.write_all(ask.as_bytes()).is_err() {
+            break;
+        }
+        // Answered by id, success or not: a CLI without get_settings says so instead of leaving us waiting.
+        let Some(r) = lines.find(|v| v["response"]["request_id"] == id.as_str()) else { break };
+        let applied = &r["response"]["response"]["applied"];
+        if applied.is_null() {
+            break; // no Ultracode report from this CLI: the rest stay unavailable
+        }
+        m.ultracode = applied["ultracodeAvailable"] == true;
+    }
+    Ok(models)
+}
+
+fn read_codex(mut out: BufReader<ChildStdout>, _: ChildStdin) -> Result<Vec<ModelOption>, String> {
     let mut s = String::new();
     out.read_to_string(&mut s).map_err(|e| e.to_string())?;
     let v: Value = serde_json::from_str(&s).map_err(|_| "Codex printed an unexpected model list.".to_string())?;
@@ -145,8 +167,8 @@ fn read_codex(mut out: BufReader<ChildStdout>) -> Result<Vec<ModelOption>, Strin
 pub fn fetch(tools: &Tools, agent: &str, timeout: Duration) -> Result<Vec<ModelOption>, String> {
     match agent {
         "claude" => run(tools, "claude", &["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-            "--settings", "{\"disableAllHooks\":true}"], INITIALIZE, timeout, read_claude),
-        "codex" => run(tools, "codex", &["debug", "models"], "", timeout, read_codex),
+            "--settings", "{\"disableAllHooks\":true}"], timeout, read_claude),
+        "codex" => run(tools, "codex", &["debug", "models"], timeout, read_codex),
         other => Err(format!("Unknown agent {other}")),
     }
 }

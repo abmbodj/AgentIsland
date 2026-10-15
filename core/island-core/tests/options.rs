@@ -91,13 +91,29 @@ fn settled(opts: &Options, tools: &Tools) -> Value {
 #[test]
 fn options_fetch_both_agents_in_the_background_and_cache_them() {
     // The fake claude answers initialize, then keeps running like the real one: the fetch must kill it.
-    let claude = format!("echo \"$@\" > \"$0.args\"\nread l\necho \"$l\" > \"$0.in\"\necho 'not json'\ncat '{}'\nsleep 30", fx("claude-initialize.jsonl"));
+    // After initialize it answers get_settings per model, like the real CLI: Ultracode only for opus.
+    let claude = format!(r#"echo "$@" > "$0.args"
+read l
+echo "$l" > "$0.in"
+echo 'not json'
+cat '{}'
+while read l; do
+  case "$l" in
+    *'"model":"opus"'*) avail=true ;;
+    *apply_flag_settings*) avail=false ;;
+    *get_settings*) id=$(echo "$l" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+      echo '{{"type":"control_response","response":{{"subtype":"success","request_id":"'$id'","response":{{"applied":{{"ultracodeAvailable":'$avail'}}}}}}}}' ;;
+  esac
+done
+sleep 30"#, fx("claude-initialize.jsonl"));
     let codex = format!("cat '{}'", fx("codex-models.json"));
     let (tools, root) = bin("ok", &[("claude", claude), ("codex", codex)]);
     let opts = Options::default();
     assert_eq!(opts.get(&tools, true)["claude"]["loading"], true);
     let v = settled(&opts, &tools);
     assert_eq!(v["claude"]["models"][0]["id"], "opus");
+    let ultra: Vec<bool> = v["claude"]["models"].as_array().unwrap().iter().map(|m| m["ultracode"] == true).collect();
+    assert_eq!(ultra, [true, false, false, false], "Ultracode only where the CLI says it can take effect");
     assert_eq!(v["codex"]["models"].as_array().unwrap().len(), 2);
     assert!(v["claude"]["error"].is_null());
     let args = std::fs::read_to_string(root.join("bin/claude.args")).unwrap();
@@ -155,4 +171,23 @@ fn a_family_is_the_word_before_the_version() {
         {"value": "c", "displayName": "Claude Opus 4.6"}]});
     let latest: Vec<bool> = parse_claude(&v).iter().map(|m| m.latest).collect();
     assert_eq!(latest, [true, true, false]);
+}
+
+#[test]
+fn a_cli_without_get_settings_still_lists_its_models_without_ultracode() {
+    // An older CLI answers get_settings with an error (and then waits for input, as the real one does).
+    let claude = format!(r#"read l
+cat '{}'
+while read l; do
+  case "$l" in
+    *get_settings*) id=$(echo "$l" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+      echo '{{"type":"control_response","response":{{"subtype":"error","request_id":"'$id'","error":"Unsupported control request subtype: get_settings"}}}}' ;;
+  esac
+done"#, fx("claude-initialize.jsonl"));
+    let (tools, _) = bin("no-get-settings", &[("claude", claude)]);
+    let start = Instant::now();
+    let models = fetch(&tools, "claude", Duration::from_secs(5)).unwrap();
+    assert!(start.elapsed() < Duration::from_secs(2), "no waiting for an answer that never comes");
+    assert_eq!(models.len(), 4);
+    assert!(models.iter().all(|m| !m.ultracode));
 }

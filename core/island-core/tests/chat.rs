@@ -371,7 +371,7 @@ echo '{"type":"turn.completed"}'"#;
 }
 
 fn s(model: Option<&str>, effort: Option<&str>, mode: Option<&str>, fast: bool) -> Settings {
-    Settings { model: model.map(Into::into), effort: effort.map(Into::into), mode: mode.map(Into::into), fast, name: None }
+    Settings { model: model.map(Into::into), effort: effort.map(Into::into), mode: mode.map(Into::into), fast, name: None, ultracode: false }
 }
 
 #[test]
@@ -458,4 +458,18 @@ fn a_terminal_handoff_carries_the_chats_last_flags() {
     chats.request_handoff(id, "terminal").unwrap();
     let claim = chats.claim_handoffs(&tools);
     assert_eq!(claim[0]["args"], serde_json::json!(["--model", "opus", "--permission-mode", "plan"]));
+}
+
+#[test]
+fn ultracode_rides_in_the_same_settings_json_as_fast_mode_and_is_claude_only() {
+    let (tools, root) = fixture("ultracode", &[("claude", CLAUDE), ("codex", "exit 0")]);
+    let dir = root.to_str().unwrap();
+    let chats = Chats::default();
+    let ultra = Settings { ultracode: true, name: Some("Opus 5.5".into()), ..s(Some("opus"), None, None, true) };
+    let id = chats.start(&tools, "claude", dir, "go", ultra).unwrap();
+    let t = wait_for(&chats, id, "idle");
+    let args = std::fs::read_to_string(root.join("bin/claude.args")).unwrap();
+    assert!(args.contains("--model opus --settings {\"fastMode\":true,\"ultracode\":true} -- go"), "{args}");
+    assert_eq!(t["entries"][0]["caption"], "Opus 5.5 · Fast · Ultracode");
+    assert!(chats.start(&tools, "codex", dir, "x", Settings { ultracode: true, ..Settings::default() }).is_err());
 }
