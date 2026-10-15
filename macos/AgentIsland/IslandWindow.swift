@@ -87,6 +87,7 @@ final class IslandController {
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var bound: Set<String> = []
     private var heightSink: AnyCancellable?
+    private var chatSink: AnyCancellable?
 
     var hoverDelay: TimeInterval { UserDefaults.standard.object(forKey: "hoverDelay") as? Double ?? 0.1 }
     var autoExpand: Bool { UserDefaults.standard.object(forKey: "autoExpand") as? Bool ?? true }
@@ -98,12 +99,15 @@ final class IslandController {
         heightSink = model.$contentHeight.removeDuplicates().dropFirst().sink { [weak self] _ in
             DispatchQueue.main.async { if self?.expanded == true { self?.render(animated: true) } }
         }
+        chatSink = model.$chat.map { $0 != nil }.removeDuplicates().dropFirst().sink { [weak self] _ in
+            DispatchQueue.main.async { if self?.expanded == true { self?.render(animated: true) } }
+        }
         model.onJump = { [weak self] s in self?.jump(s) }
         model.onSummon = { [weak self] in self?.summon() }
         model.onCommitted = { [weak self] in
             // After the last answer, hand the keyboard back (D8).
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                guard let self, self.model.summoned, self.model.cards.isEmpty else { return }
+                guard let self, self.model.summoned, self.model.chat == nil, self.model.cards.isEmpty else { return }
                 self.endSummon(collapse: true)
             }
         }
@@ -148,6 +152,19 @@ final class IslandController {
         observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.expand"), object: nil, queue: .main) { [weak self] n in
             self?.setExpanded((n.object as? String) != "collapse", pinned: true)
         }))
+        // "agent|message": start a chat from the composer, as if typed.
+        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.compose"), object: nil, queue: .main) { [weak self] n in
+            guard let self, let raw = n.object as? String else { return }
+            let parts = raw.split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { return }
+            self.setExpanded(true, pinned: true)
+            self.model.composerAgent = parts[0]
+            self.model.draft = parts[1]
+            self.model.startChat()
+        }))
+        // Replace the snapshot with an empty one (the next real change overwrites it): the "no sessions" state.
+        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.emptySnapshot"), object: nil, queue: .main) { [weak self] _ in self?.update(Snapshot()) }))
+        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.back"), object: nil, queue: .main) { [weak self] _ in self?.model.closeChat() }))
         // Writes a PNG of the island window to a path under /tmp (no Screen Recording permission needed).
         observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.snapshot"), object: nil, queue: .main) { [weak self] n in
             guard let path = n.object as? String, path.hasPrefix("/tmp/") || path.hasPrefix("/private/tmp/"),
@@ -212,7 +229,7 @@ final class IslandController {
         openTimer?.cancel()
         closeTimer?.cancel()
         pinned = on && pin
-        if !on { autoOpened = false }
+        if !on { autoOpened = false; model.closeChat() }
         guard on != expanded else { render(animated: true); return }
         expanded = on
         render(animated: true)
@@ -267,8 +284,19 @@ final class IslandController {
         let typing = panel.firstResponder is NSTextView
         let cmd = e.modifierFlags.contains(.command)
         let chars = e.charactersIgnoringModifiers?.lowercased() ?? ""
+        if cmd, chars == "[", model.chat != nil { // ⌘[ : back to the session list
+            model.closeChat()
+            return true
+        }
         if e.keyCode == 53 { // Esc
-            if model.staged != nil { model.undo() } else { endSummon(collapse: true) }
+            if model.staged != nil {
+                model.undo()
+            } else if model.chat != nil {
+                // In a conversation Esc steps back, but never throws away a draft.
+                if model.draft.isEmpty { model.closeChat() } else { endSummon(collapse: false) }
+            } else {
+                endSummon(collapse: true)
+            }
             return true
         }
         guard let (_, item) = model.current else {
@@ -308,7 +336,8 @@ final class IslandController {
             }
         } else {
             openTimer?.cancel()
-            if expanded && !pinned && !autoOpened {
+            // An open conversation stays until Back or a click outside; hover-out must not drop it mid-turn.
+            if expanded && !pinned && !autoOpened && model.chat == nil {
                 let w = DispatchWorkItem { [weak self] in self?.setExpanded(false, pinned: false) }
                 closeTimer = w
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: w)
@@ -374,8 +403,8 @@ final class IslandController {
         guard g != geometry else { return }
         geometry = g
         // Envelope: the drawing space for wings and the dropped-down panel, anchored at the screen top.
-        let w = max(g.notch.width + 440, IslandView.panelWidth + 80)
-        let h = g.notch.height + IslandView.panelMaxHeight
+        let w = max(g.notch.width + 440, PanelModel.chatWidth + 80)
+        let h = g.notch.height + min(IslandView.chatMaxHeight, screen.visibleFrame.height - 40)
         envelopeOrigin = CGPoint(x: g.notch.midX - w / 2, y: screen.frame.maxY - h)
         view.envelope = CGSize(width: w, height: h)
         view.configure(notchWidth: g.notch.width, notchHeight: g.notch.height, hasNotch: g.hasNotch)

@@ -28,9 +28,12 @@ final class IslandView: NSView {
     private(set) var notchHeight: CGFloat = 32
     private(set) var hasNotch = true
     private let dot: CGFloat = 6, gap: CGFloat = 6, pad: CGFloat = 11, ear: CGFloat = 6, maxDots = 6
-    static let panelWidth: CGFloat = 440
+    /// List mode is 440 wide; an open chat widens to `PanelModel.chatWidth`.
+    private var panelWidth: CGFloat { model.width }
     /// Room below the notch for the dropped-down panel (see `IslandController.reposition`).
     static let panelMaxHeight: CGFloat = 460
+    /// Room below the notch when a chat is open.
+    static let chatMaxHeight: CGFloat = PanelModel.chatHeight + 14
 
     /// Fixed coordinate space for all drawing ("envelope"); the window only covers `islandRect` of it.
     var envelope = CGSize(width: 620, height: 492)
@@ -75,7 +78,7 @@ final class IslandView: NSView {
 
         hosting.alphaValue = 0
         addSubview(hosting)
-        hosting.frame = CGRect(x: 0, y: -2000, width: Self.panelWidth, height: 2000)
+        hosting.frame = CGRect(x: 0, y: -2000, width: PanelModel.listWidth, height: 2000)
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
     }
@@ -140,7 +143,7 @@ final class IslandView: NSView {
         let path: CGPath?
         let hidden = !self.expanded && sessions.isEmpty
         if self.expanded {
-            let w = Self.panelWidth
+            let w = panelWidth
             let measured = model.contentHeight > 0 ? model.contentHeight : hosting.fittingSize.height
             let contentH = min(measured, H - notchHeight)
             let rect = CGRect(x: mid - w / 2, y: H - notchHeight - contentH, width: w, height: notchHeight + contentH)

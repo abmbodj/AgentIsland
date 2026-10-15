@@ -10,7 +10,7 @@ Developers who keep several local AI coding agents (Claude Code, Codex; CLI and 
 
 ## Product Purpose
 
-Agent Island is a status light that lives in the MacBook notch (or a slim top-center pill elsewhere). It detects agent sessions through each agent's official hooks, shows their state at a glance, lets the developer answer approvals and questions inline, and jumps to the exact terminal tab or pane when they want to look. Success: the developer forgets it is there until an agent needs them, answers in one keystroke or click, and never loses their place.
+Agent Island is a status light that lives in the MacBook notch (or a slim top-center pill elsewhere). It detects agent sessions through each agent's official hooks, shows their state at a glance, lets the developer answer approvals and questions inline, and jumps to the exact terminal tab or pane when they want to look. A composer at the bottom of the panel starts a Claude Code or Codex session from a typed message and opens its conversation in place (a Back button returns to the session list); the island stays a status light first, never a chat client you keep open. Success: the developer forgets it is there until an agent needs them, answers in one keystroke or click, and never loses their place.
 
 ## Brand Personality
 
@@ -27,7 +27,7 @@ Calm, precise, trustworthy. A native instrument, not an app you visit. Quiet whi
 
 - **Earn every glance.** Nothing changes visually unless it helps decide what to do next. Five busy agents look like five quiet dots.
 - **Color means something.** Amber only for "needs you", green only for "done". Everything routine is neutral, and every color is paired with a shape.
-- **Never take the keyboard.** The overlay never steals focus unless summoned; clicks work without focus.
+- **Never take the keyboard.** The overlay never steals focus unless summoned; clicks work without focus. The composer is the one control that asks for it, and only when you click it.
 - **Honest state.** Show only what hooks actually reported. No estimates, no guessed progress; stale is labelled stale.
 - **Leave no trace.** Local only, consented config changes shown as diffs, byte-exact uninstall.
 

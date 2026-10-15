@@ -13,7 +13,10 @@ final class PanelModel: ObservableObject {
     @Published var contentHeight: CGFloat = 0
     /// Only tick the elapsed-time clock while the panel is open.
     @Published var isOpen = false {
-        didSet { if isOpen && !oldValue { refreshPRs() } }
+        didSet {
+            if isOpen && !oldValue { refreshPRs(); refreshChats(); startPolling() }
+            if !isOpen { chat = nil; entries = [] } // collapsing returns to the list; running chats carry on
+        }
     }
     /// Open PR button state and chosen base branch, by session id.
     @Published var pr: [String: PRState] = [:]
@@ -30,6 +33,17 @@ final class PanelModel: ObservableObject {
     @Published var picks: [UInt64: Set<String>] = [:]
     @Published var answered: [UInt64: [String: String]] = [:]
     @Published var freeText = ""
+    // Composer chats (see Chat.swift). `chat` is the open conversation; nil shows the session list.
+    @Published var chats: [ChatInfo] = []
+    @Published var chat: ChatInfo?
+    @Published var entries: [ChatEntry] = []
+    @Published var chatStatus = "idle"
+    @Published var chatError: String?
+    @Published var disconnected = false
+    @Published var draft = ""
+    @Published var composeError: String?
+    var rev = 0
+    var pollTimer: Timer?
     var onJump: (SessionInfo) -> Void = { _ in }
     /// Ask the controller to enter keyboard mode (e.g. to type a free-text answer).
     var onSummon: () -> Void = {}
@@ -186,11 +200,12 @@ struct PanelView: View {
     @State private var cardHeight: CGFloat = 0
     @State private var rowsHeight: CGFloat = 0
     @State private var stripHeight: CGFloat = 0
+    @State private var composerHeight: CGFloat = 0
 
-    var body: some View {
+    private var list: some View {
         TimelineView(.periodic(from: .now, by: model.isOpen ? 1 : 3600)) { ctx in
             VStack(alignment: .leading, spacing: 0) {
-                if model.snapshot.sessions.isEmpty {
+                if model.snapshot.sessions.isEmpty && model.chats.isEmpty {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 8) {
                             AgentMark(agent: "claude", size: 14)
@@ -199,7 +214,7 @@ struct PanelView: View {
                         .padding(.bottom, 6)
                         .accessibilityHidden(true)
                         Text("No agent sessions").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
-                        Text("Start Claude Code or Codex and it appears here.").font(.system(size: 11)).foregroundStyle(secondary)
+                        Text("Type below to start one, or open Claude Code or Codex.").font(.system(size: 11)).foregroundStyle(secondary)
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
@@ -207,7 +222,7 @@ struct PanelView: View {
                     VStack(alignment: .leading, spacing: 0) { CardArea(model: model) }
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0 }
                     // Panel padding is 4 top + 10 bottom.
-                    let room = max(60, IslandView.panelMaxHeight - 14 - cardHeight - stripHeight)
+                    let room = max(60, IslandView.panelMaxHeight - 14 - cardHeight - stripHeight - composerHeight)
                     ScrollView {
                         rows(ctx.date)
                             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowsHeight = $0 }
@@ -216,12 +231,19 @@ struct PanelView: View {
                 }
                 UsageStrip(usage: model.snapshot.usage, now: ctx.date)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stripHeight = $0 }
+                Composer(model: model, mode: .new)
+                    .padding(.top, 8)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height + 8 } action: { composerHeight = $0 }
             }
         }
+    }
+
+    var body: some View {
+        Group { if model.chat != nil { ChatView(model: model) } else { list } }
         .padding(.horizontal, 8)
         .padding(.top, 4)
         .padding(.bottom, 10)
-        .frame(width: IslandView.panelWidth, alignment: .top)
+        .frame(width: model.width, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
         .background(GeometryReader { g in Color.clear.preference(key: HeightKey.self, value: g.size.height) })
         .onPreferenceChange(HeightKey.self) { h in
@@ -233,6 +255,10 @@ struct PanelView: View {
 
     private func rows(_ now: Date) -> some View {
         VStack(spacing: 1) {
+            // Chats the agents' hooks haven't reported as sessions; matched ones are the session rows below.
+            ForEach(model.chats.filter { c in !model.snapshot.sessions.contains { $0.id == c.sessionId } }) { c in
+                ChatRow(chat: c, model: model)
+            }
             ForEach(model.snapshot.sessions) { s in
                 SessionRow(session: s, now: now, model: model)
                 if model.openGroups.contains(s.id) {
@@ -317,10 +343,10 @@ private struct SessionRow: View {
         .onHover { hover = $0 }
         // Press tint only; the tap stays a plain onTapGesture so the subagent chip's button still wins its own clicks.
         .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in pressed = true }.onEnded { _ in pressed = false })
-        .onTapGesture { model.onJump(session) }
+        .onTapGesture { model.tap(session) }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint("Shows this session's terminal")
+        .accessibilityHint(model.chatFor(session) == nil ? "Shows this session's terminal" : "Opens this conversation")
         // The row is one combined element, so its PR control is offered as actions.
         .accessibilityActions {
             switch model.pr[session.id] {
