@@ -20,6 +20,9 @@ enum Theme {
     /// Claude brand clay #D97757, oklch(0.67 0.13 39): only on the Claude mark, redder than amber.
     static let claudeClay = NSColor(srgbRed: 0.851, green: 0.467, blue: 0.341, alpha: 1)
 
+    /// Claude Code's own Ultracode violet #d0b4ff, oklch(0.81 0.11 300): only on the Ultracode model chip.
+    static let ultracode = NSColor(srgbRed: 0.816, green: 0.706, blue: 1.0, alpha: 1)
+
     static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 }
 

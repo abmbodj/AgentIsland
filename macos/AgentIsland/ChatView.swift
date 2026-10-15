@@ -164,48 +164,207 @@ struct Composer: View {
             .padding(.trailing, 6)
             .padding(.vertical, 3)
             .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.07)))
-            if mode == .new { options }
+            options
         }
-        .onAppear { if model.summoned { focusTick += 1 } }
+        .onAppear {
+            model.loadOptions(refresh: true)
+            if model.summoned { focusTick += 1 }
+        }
+    }
+
+    private var chipAgent: String { mode == .new ? model.composerAgent : (model.chat?.agent ?? model.composerAgent) }
+
+    /// Which agent names the toggle shows; it gives up its labels before the folder name does.
+    private enum ToggleLabels { case both, selected, none }
+
+    private func agentToggle(_ labels: ToggleLabels) -> some View {
+        HStack(spacing: 2) {
+            ForEach(["claude", "codex"], id: \.self) { a in
+                let on = model.composerAgent == a
+                Button { model.composerAgent = a } label: {
+                    HStack(spacing: 5) {
+                        AgentMark(agent: a, size: 11)
+                        if labels == .both || (labels == .selected && on) {
+                            Text(a == "codex" ? "Codex" : "Claude").font(.system(size: 11, weight: .medium))
+                        }
+                    }
+                    .foregroundStyle(on ? ink : secondary)
+                    .padding(.horizontal, 8)
+                    .frame(height: 22)
+                    .background(Capsule().fill(Color.white.opacity(on ? 0.14 : 0)))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(Fmt.agentName(a))
+                .accessibilityLabel(Fmt.agentName(a))
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
     }
 
     private var options: some View {
         HStack(spacing: 6) {
-            HStack(spacing: 2) {
-                ForEach(["claude", "codex"], id: \.self) { a in
-                    Button { model.composerAgent = a } label: {
-                        HStack(spacing: 5) {
-                            AgentMark(agent: a, size: 11)
-                            Text(a == "codex" ? "Codex" : "Claude").font(.system(size: 11, weight: .medium))
-                        }
-                        .foregroundStyle(model.composerAgent == a ? ink : secondary)
-                        .padding(.horizontal, 8)
-                        .frame(height: 22)
-                        .background(Capsule().fill(Color.white.opacity(model.composerAgent == a ? 0.14 : 0)))
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Fmt.agentName(a))
-                    .accessibilityAddTraits(model.composerAgent == a ? .isSelected : [])
+            if mode == .new {
+                // A tight row (long mode, long model) compacts the toggle first, so the folder name stays readable.
+                ViewThatFits(in: .horizontal) {
+                    agentToggle(.both)
+                    agentToggle(.selected)
+                    agentToggle(.none)
                 }
+                .layoutPriority(1) // offered the leftover width before the spacer
             }
-            Spacer(minLength: 6)
-            Button { model.chooseComposerDir() } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "folder").font(.system(size: 10))
-                    Text(model.composerDirName).font(.system(size: 11)).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 0)
+            TurnChips(
+                agent: chipAgent,
+                options: model.options[chipAgent],
+                settings: model.settings(reply: mode == .reply),
+                set: { model.setSettings($0, reply: mode == .reply) }
+            )
+            if mode == .new {
+                Button { model.chooseComposerDir() } label: {
+                    Chip(icon: "folder", text: model.composerDirName, menu: false)
                 }
-                .foregroundStyle(secondary)
-                .padding(.horizontal, 8)
-                .frame(height: 22)
-                .contentShape(Rectangle())
+                .buttonStyle(IslandButtonStyle(radius: 6))
+                .fixedSize()
+                .help(model.composerDir)
+                .accessibilityLabel("Working folder: \(model.composerDirName)")
+                .accessibilityHint("Choose another folder")
             }
-            .buttonStyle(IslandButtonStyle(radius: 6))
-            .help(model.composerDir)
-            .accessibilityLabel("Working folder: \(model.composerDirName)")
-            .accessibilityHint("Choose another folder")
         }
         .padding(.horizontal, 2)
+    }
+}
+
+private let ultracodeViolet = Color(nsColor: Theme.ultracode)
+
+/// One composer-row chip: secondary ink at rest, a faint lift on hover (DESIGN.md: 6-8% white lifts).
+/// With Ultracode on, the chip takes Claude Code's own violet and slowly breathes; Reduce Motion holds it still.
+private struct Chip: View {
+    var icon: String?
+    let text: String
+    var menu = true
+    var ultracode = false
+    @State private var hover = false
+    @State private var breathe = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The Ultracode tint; hover is its own layer so it never retargets the breath.
+    private var fill: Color { ultracode ? ultracodeViolet.opacity(breathe ? 0.22 : 0.12) : .clear }
+    /// The breath animates only the fill and hairline, never layout, so it can't catch the panel's own resize.
+    private var breath: Animation {
+        breathe ? .easeInOut(duration: 1.8).repeatForever(autoreverses: true) : Motion.quick
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let icon { Image(systemName: icon).font(.system(size: 10)).frame(width: 11) }
+            Text(text).font(.system(size: 11, weight: ultracode ? .medium : .regular)).lineLimit(1).truncationMode(.middle)
+                .frame(maxWidth: menu ? 180 : 120, alignment: .leading) // only very long names truncate
+            if menu { Image(systemName: "chevron.up.chevron.down").font(.system(size: 7, weight: .semibold)).foregroundStyle(ultracode ? ultracodeViolet.opacity(0.7) : muted) }
+        }
+        .foregroundStyle(ultracode ? ultracodeViolet : (hover ? ink : secondary))
+        .padding(.horizontal, 6)
+        .frame(height: 22)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(hover ? 0.08 : 0)))
+        .background(RoundedRectangle(cornerRadius: 6).fill(fill).animation(breath, value: breathe))
+        .overlay(RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(ultracodeViolet.opacity(ultracode ? (breathe ? 0.45 : 0.2) : 0), lineWidth: 1)
+            .animation(breath, value: breathe))
+        .contentShape(Rectangle())
+        .onHover { h in withAnimation(Motion.quick) { hover = h } }
+        .onChange(of: ultracode && !reduceMotion, initial: true) { _, on in breathe = on }
+    }
+}
+
+/// Mode chip and Model chip: native menus, so items keep macOS checkmarks, sections and keyboard behaviour.
+private struct TurnChips: View {
+    let agent: String
+    let options: AgentOptions?
+    let settings: TurnSettings
+    let set: (TurnSettings) -> Void
+
+    private var models: [ModelOption] { options?.models ?? [] }
+    private var current: ModelOption? { settings.model.flatMap { id in models.first { $0.id == id } } }
+    private var modeID: String { settings.mode ?? (agent == "codex" ? "workspace-write" : "") }
+    private var modes: [(id: String, name: String, icon: String)] {
+        TurnLabels.modes(agent).filter { $0.id != "auto" || current?.auto != false }
+    }
+    private var mode: (id: String, name: String, icon: String) {
+        TurnLabels.modes(agent).first { $0.id == modeID } ?? ("", "Default", "gearshape")
+    }
+    private var modelText: String {
+        let parts = [settings.name ?? settings.model, settings.effort.map(TurnLabels.effort)].compactMap { $0 }
+        return parts.isEmpty ? "Default" : parts.joined(separator: " · ")
+    }
+
+    private func update(_ change: (inout TurnSettings) -> Void) {
+        var s = settings
+        change(&s)
+        set(s)
+    }
+
+    private var modelBinding: Binding<String> {
+        Binding(get: { settings.model ?? "" }, set: { id in update { $0.model = id.isEmpty ? nil : id } })
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Menu {
+                Picker("Mode", selection: Binding(get: { modeID }, set: { id in update { $0.mode = id.isEmpty ? nil : id } })) {
+                    ForEach(modes, id: \.id) { Label($0.name, systemImage: $0.icon).tag($0.id) }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Chip(icon: mode.icon, text: mode.name)
+            }
+            .menuStyle(.button).buttonStyle(IslandButtonStyle(radius: 6)).menuIndicator(.hidden).fixedSize()
+            .help("Mode")
+            .accessibilityLabel("Mode: \(mode.name)")
+
+            Menu {
+                Picker("Model", selection: modelBinding) {
+                    Text("Default").tag("")
+                    ForEach(models.filter(\.latest)) { Text($0.name).tag($0.id) }
+                }
+                .pickerStyle(.inline)
+                let older = models.filter { !$0.latest }
+                if !older.isEmpty {
+                    Menu("Older models") {
+                        Picker("Older models", selection: modelBinding) {
+                            ForEach(older) { Text($0.name).tag($0.id) }
+                        }
+                        .pickerStyle(.inline)
+                    }
+                }
+                let levels = settings.effortLevels(in: options)
+                if !levels.isEmpty {
+                    Picker("Effort", selection: Binding(get: { settings.effort ?? "" }, set: { e in update { $0.effort = e.isEmpty ? nil : e } })) {
+                        Text("Default").tag("")
+                        ForEach(levels, id: \.self) { Text(TurnLabels.effort($0)).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                }
+                if agent == "claude", current?.fast == true || current?.ultracode == true {
+                    Divider()
+                    if current?.fast == true {
+                        Toggle("Fast mode", isOn: Binding(get: { settings.fast }, set: { on in update { $0.fast = on } }))
+                    }
+                    if current?.ultracode == true {
+                        Toggle("Ultracode", isOn: Binding(get: { settings.isUltracode }, set: { on in update { $0.ultracode = on ? true : nil } }))
+                    }
+                }
+                if models.isEmpty {
+                    Text(options?.loading == true ? "Loading models…" : (options?.error ?? "Models unavailable")).disabled(true)
+                }
+            } label: {
+                Chip(icon: settings.isUltracode ? "sparkles" : (settings.fast ? "bolt.fill" : "cpu"), text: modelText, ultracode: settings.isUltracode)
+            }
+            .menuStyle(.button).buttonStyle(IslandButtonStyle(radius: 6)).menuIndicator(.hidden).fixedSize()
+            .help("Model and effort")
+            .accessibilityLabel("Model: \(settings.name ?? settings.model ?? "Default")"
+                + (settings.effort.map { ", effort \(TurnLabels.effort($0))" } ?? "") + (settings.fast ? ", fast mode" : "")
+                + (settings.isUltracode ? ", Ultracode" : ""))
+        }
     }
 }
 
@@ -480,16 +639,21 @@ private struct EntryView: View {
         case "user":
             HStack {
                 Spacer(minLength: 56)
-                Text(entry.text)
-                    .font(.system(size: 13))
-                    .foregroundStyle(ink)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08)))
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text(entry.text)
+                        .font(.system(size: 13))
+                        .foregroundStyle(ink)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08)))
+                    if !entry.caption.isEmpty {
+                        Text(entry.caption).font(.system(size: 10)).foregroundStyle(muted).padding(.trailing, 4)
+                    }
+                }
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("You: \(entry.text)")
+            .accessibilityLabel(entry.caption.isEmpty ? "You: \(entry.text)" : "You: \(entry.text). \(entry.caption)")
         case "assistant":
             AssistantText(text: entry.text)
         case "tool":

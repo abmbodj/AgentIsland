@@ -24,9 +24,51 @@ impl Tools {
         Tools { dirs: extra.into_iter().chain(dirs).chain([home.join(".local/bin"), PathBuf::from("/usr/bin")]).collect() }
     }
 
+    /// The tool's path. With several installs (an old Homebrew cask beside a self-updating native install),
+    /// the one reporting the highest `--version` wins, so agents run their newest CLI and model catalog.
+    /// Only the agents race on version; git and gh keep search order (and /usr/bin/git, an Xcode shim, is never run).
+    /// An `AGENT_ISLAND_TOOLS` override always wins, so fake agents in tests and demos stay in charge.
     pub fn find(&self, name: &str) -> Option<PathBuf> {
-        self.dirs.iter().map(|d| d.join(name)).find(|p| p.is_file())
+        let found: Vec<PathBuf> = self.dirs.iter().map(|d| d.join(name)).filter(|p| p.is_file()).collect();
+        let overridden = std::env::var("AGENT_ISLAND_TOOLS").unwrap_or_default().split(':')
+            .any(|d| !d.is_empty() && found.first().is_some_and(|p| p.parent() == Some(Path::new(d))));
+        if found.len() < 2 || overridden || !matches!(name, "claude" | "codex") {
+            return found.into_iter().next();
+        }
+        // Keyed by each install's path and modified time, so a self-update re-runs the race.
+        let key: Vec<(PathBuf, Option<std::time::SystemTime>)> =
+            found.iter().map(|p| (p.clone(), std::fs::metadata(p).and_then(|m| m.modified()).ok())).collect();
+        static NEWEST: Mutex<Vec<(Vec<(PathBuf, Option<std::time::SystemTime>)>, PathBuf)>> = Mutex::new(Vec::new());
+        if let Some((_, p)) = NEWEST.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == key) {
+            return Some(p.clone());
+        }
+        // Outside the lock: --version can take a moment. max_by_key keeps the last of equal keys, so walk in
+        // reverse for search order to break ties.
+        let best = found.iter().rev().max_by_key(|p| version(p)).cloned()?;
+        NEWEST.lock().unwrap_or_else(|e| e.into_inner()).push((key, best.clone()));
+        Some(best)
     }
+}
+
+/// "2.1.299 (Claude Code)" -> [2, 1, 299]; empty when the tool doesn't answer within two seconds.
+fn version(bin: &Path) -> Vec<u32> {
+    let Ok(mut child) = Command::new(bin).arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn() else {
+        return Vec::new();
+    };
+    let end = Instant::now() + Duration::from_secs(2);
+    while child.try_wait().ok().flatten().is_none() {
+        if Instant::now() > end {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Vec::new();
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut out = String::new();
+    let _ = child.stdout.take().map(|mut s| s.read_to_string(&mut out));
+    out.split(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .find_map(|w| w.split('.').map(|n| n.parse().ok()).collect::<Option<Vec<u32>>>().filter(|v| v.len() > 1))
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
