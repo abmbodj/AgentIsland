@@ -88,6 +88,35 @@ echo '{"type":"result","subtype":"success","is_error":false,"session_id":"permis
     assert_eq!(response["response"]["response"]["updatedInput"]["content"], "revised");
 }
 
+#[test]
+fn stop_immediately_invalidates_an_implementation_permission() {
+    let script = r##"read first
+if [ -f "$0.planned" ]; then
+  trap 'sleep 1; exit 0' TERM
+  echo '{"type":"control_request","request_id":"write-1","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"result.txt","content":"revised"}}}'
+  read approval
+else
+  touch "$0.planned"
+  echo '{"type":"control_request","request_id":"exit","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":"# Write result.txt"}}}'
+  read response
+fi
+echo '{"type":"result","subtype":"success","is_error":false,"session_id":"permission-stop"}'"##;
+    let (tools, root) = fixture("plan-permission-stop", &[("claude", script)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "plan", vec![], s(None, None, Some("plan"), false)).unwrap();
+    wait_for(&chats, id, "idle");
+    chats.plan_action(&tools, id, 1, "implement", None).unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    while chats.transcript(id, 0).unwrap()["approval"].is_null() {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    chats.stop(id);
+    assert!(chats.transcript(id, 0).unwrap()["approval"].is_null());
+    assert!(chats.permission(id, "write-1", true).is_err());
+    wait_for(&chats, id, "idle");
+}
+
 const CLAUDE: &str = r#"echo "$@" >> "$0.args"
 echo '{"type":"system","subtype":"init","session_id":"sess-1"}'
 echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m'$$'"}}}'

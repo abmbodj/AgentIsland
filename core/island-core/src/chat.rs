@@ -414,6 +414,7 @@ fn reply(g: &mut State, request_id: &str, body: Value) {
 /// Questions and reviewed-plan implementation permissions wait for the user.
 /// Plan exits are saved without authorizing execution; other permissions retain existing behavior.
 fn control(g: &mut State, v: &Value) {
+    if g.stopping { return; }
     if v["type"] == "control_cancel_request" {
         if g.question.as_ref().is_some_and(|q| Some(q.request_id.as_str()) == v["request_id"].as_str()) { g.question = None }
         if g.approval.as_ref().is_some_and(|a| Some(a.request_id.as_str()) == v["request_id"].as_str()) { g.approval = None }
@@ -562,7 +563,7 @@ impl Chats {
     pub fn permission(&self, id: u64, request_id: &str, allow: bool) -> Result<(), String> {
         let chat = self.get(id)?;
         let mut g = chat.lock();
-        if !g.approval.as_ref().is_some_and(|a| a.request_id == request_id) {
+        if g.stopping || g.status != Status::Running || !g.approval.as_ref().is_some_and(|a| a.request_id == request_id) {
             return Err("That permission request is no longer active.".into());
         }
         let approval = g.approval.take().unwrap();
@@ -681,6 +682,8 @@ impl Chats {
             let mut g = chat.lock();
             if g.status == Status::Running {
                 g.stopping = true; // also covers a Stop that lands before the process is spawned
+                g.approval = None;
+                g.question = None;
                 if let Some(pid) = g.pid {
                     unsafe { libc::kill(-pid, libc::SIGTERM) };
                 }
