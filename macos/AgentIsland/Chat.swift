@@ -342,15 +342,19 @@ extension PanelModel {
     /// agent we spawn would otherwise stall silently behind that prompt. If the read blocks, the island steps
     /// down below the prompt (`accessPrompt`) so it can be answered.
     private func withFolderAccess(_ dir: String, _ proceed: @escaping () -> Void) {
-        guard accessPrompt == nil else { return }
+        guard !checkingAccess else { return }
+        checkingAccess = true
         var done = false
+        let (screen0, chat0) = (screen, chat?.id)
         DispatchQueue.global().async {
             _ = try? FileManager.default.contentsOfDirectory(atPath: dir)
             DispatchQueue.main.async { [self] in
                 done = true
+                checkingAccess = false
                 accessPrompt = nil
                 composeError = nil
-                proceed()
+                // Skip if you went back or opened another chat while the prompt was up.
+                if screen == screen0 && chat?.id == chat0 { proceed() }
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [self] in
