@@ -74,6 +74,7 @@ struct Inner {
 pub struct Core {
     inner: Arc<Inner>,
     chats: crate::chat::Chats,
+    options: crate::options::Options,
 }
 
 pub fn now_ms() -> Millis {
@@ -426,7 +427,7 @@ impl Core {
             }
         }).map_err(|e| e.to_string())?;
 
-        Ok(Core { inner, chats: Default::default() })
+        Ok(Core { inner, chats: Default::default(), options: Default::default() })
     }
 
     /// Fire-and-forget commands from the UI: `{"type":"viewed","agent":..,"id":..}`, `{"type":"pause","paused":true}`.
@@ -481,6 +482,7 @@ impl Core {
                 crate::pr::cancel(req["cwd"].as_str().unwrap_or_default());
                 Ok(Value::Null)
             }
+            "chatOptions" => Ok(self.options.get(&self.tools(), req["refresh"] == true)),
             "chatStart" => {
                 let s = |k: &str| req[k].as_str().unwrap_or_default();
                 self.chats.start(&self.tools(), s("agent"), s("cwd"), s("text")).map(|id| json!({"id": id}))
