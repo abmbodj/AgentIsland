@@ -526,3 +526,86 @@ echo '{"type":"result","subtype":"success","is_error":false,"session_id":"s"}'"#
     assert!(lines[0].contains("\"request_id\":\"b1\"") && lines[0].contains("\"behavior\":\"deny\""), "{log}");
     assert!(lines[1].contains("\"request_id\":\"q1\"") && lines[1].contains("\"behavior\":\"deny\""), "{log}");
 }
+
+#[test]
+fn plans_stream_revise_and_implement_exact_version_once() {
+    let script = r##"echo "$@" >> "$0.args"
+read first; echo "$first" >> "$0.in"
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"plan-session"}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m'$$'"}}}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"# Full plan\n\n- preserve content"}}}'
+printf '%s\n' '{"type":"control_request","request_id":"exit","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":"# Full plan\n\n- preserve content"}}}'
+read response; echo "$response" >> "$0.in"
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"plan-session"}'"##;
+    let (tools, root) = fixture("plan-review", &[("claude", script)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools,"claude",root.to_str().unwrap(),"plan",vec![],s(Some("opus"),Some("high"),Some("plan"),true)).unwrap();
+    let t = wait_for(&chats,id,"idle");
+    assert_eq!(t["plans"][0]["markdown"], "# Full plan\n\n- preserve content");
+    assert_eq!(t["plans"][0]["status"], "ready");
+    assert!(kinds(&t).contains(&"plan".into()));
+    assert!(chats.plan_action(&tools,id,1,"revise",Some("  ")).is_err());
+    chats.plan_action(&tools,id,1,"revise",Some("Use tests")).unwrap();
+    let t = wait_for(&chats,id,"idle");
+    assert_eq!(t["plans"][0]["status"], "superseded");
+    assert_eq!(t["plans"][1]["status"], "ready");
+    assert!(chats.plan_action(&tools,id,1,"implement",None).is_err());
+    chats.plan_action(&tools,id,2,"implement",None).unwrap();
+    assert!(chats.plan_action(&tools,id,2,"implement",None).is_err());
+    let t = wait_for(&chats,id,"idle");
+    assert!(t["settings"]["mode"].is_null());
+    let args=std::fs::read_to_string(root.join("bin/claude.args")).unwrap();
+    let lines: Vec<_> = args.lines().collect(); assert_eq!(lines.len(),3);
+    assert!(lines[1].contains("--permission-mode plan"));
+    assert!(lines[2].contains("--permission-mode default"));
+    assert!(lines[2].contains("--model opus --effort high"));
+    let input=std::fs::read_to_string(root.join("bin/claude.in")).unwrap();
+    assert!(input.contains("Use tests")); assert!(input.contains("Implement plan version 2"));
+    assert!(input.contains("preserve content"));
+    assert!(!input.contains("\"behavior\":\"allow\""));
+}
+
+#[test]
+fn incomplete_plans_are_unavailable_and_rejection_does_not_launch() {
+    let script = r##"printf '%s\n' '{"type":"assistant","message":{"id":"p","content":[{"type":"text","text":"# Partial"}]}}'
+exit 0"##;
+    let (tools,root)=fixture("plan-incomplete", &[("claude",script)]);
+    let chats=Chats::default();
+    let id=chats.start(&tools,"claude",root.to_str().unwrap(),"plan",vec![],s(None,None,Some("plan"),false)).unwrap();
+    let t=wait_for(&chats,id,"idle");
+    assert_eq!(t["plans"][0]["status"],"unavailable");
+    assert!(chats.plan_action(&tools,id,1,"implement",None).is_err());
+
+    let (tools,root)=fixture("plan-reject", &[("claude",CLAUDE)]);
+    let id=chats.start(&tools,"claude",root.to_str().unwrap(),"plan",vec![],s(None,None,Some("plan"),false)).unwrap();
+    wait_for(&chats,id,"idle");
+    chats.request_handoff(id,"terminal").unwrap();
+    assert!(chats.plan_action(&tools,id,1,"reject",None).is_err());
+    chats.cancel_handoff(id).unwrap();
+    chats.plan_action(&tools,id,1,"reject",None).unwrap();
+    assert_eq!(chats.transcript(id,0).unwrap()["plans"][0]["status"],"rejected");
+    assert_eq!(std::fs::read_to_string(root.join("bin/claude.args")).unwrap().lines().count(),1);
+}
+
+#[test]
+fn plan_launch_failure_can_retry_and_restores_previous_permissions() {
+    let (tools,root)=fixture("plan-retry", &[("claude",CLAUDE)]);
+    let chats=Chats::default();
+    let id=chats.start(&tools,"claude",root.to_str().unwrap(),"first",vec![],s(Some("opus"),None,Some("acceptEdits"),true)).unwrap();
+    wait_for(&chats,id,"idle");
+    chats.send(&tools,id,"plan",vec![],s(Some("opus"),None,Some("plan"),true)).unwrap();
+    wait_for(&chats,id,"idle");
+    std::fs::rename(root.join("bin/claude"),root.join("bin/saved")).unwrap();
+    assert!(chats.plan_action(&tools,id,1,"implement",None).is_err());
+    assert_eq!(chats.transcript(id,0).unwrap()["plans"][0]["status"],"ready");
+    std::fs::rename(root.join("bin/saved"),root.join("bin/claude")).unwrap();
+    std::thread::scope(|scope| {
+        let a=scope.spawn(|| chats.plan_action(&tools,id,1,"implement",None));
+        let b=scope.spawn(|| chats.plan_action(&tools,id,1,"implement",None));
+        assert_ne!(a.join().unwrap().is_ok(),b.join().unwrap().is_ok());
+    });
+    let t=wait_for(&chats,id,"idle");
+    assert_eq!(t["settings"]["mode"],"acceptEdits");
+    let args=std::fs::read_to_string(root.join("bin/claude.args")).unwrap();
+    assert_eq!(args.lines().count(),3); assert!(args.lines().last().unwrap().contains("--permission-mode acceptEdits"));
+}

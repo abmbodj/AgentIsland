@@ -2,6 +2,7 @@
 //! its JSON event stream folded into an in-memory transcript the UI pulls by revision.
 //! A follow-up turn resumes the agent's own session; Stop kills the turn's process group.
 use crate::pr::Tools;
+use crate::plan::PlanBook;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -370,6 +371,10 @@ struct Handoff {
 
 struct State {
     transcript: Transcript,
+    plans: PlanBook,
+    planning_start: Option<usize>,
+    native_plan: Option<String>,
+    previous_mode: Option<String>,
     status: Status,
     error: Option<String>,
     pid: Option<i32>,
@@ -408,7 +413,11 @@ fn control(g: &mut State, v: &Value) {
     if r["subtype"] != "can_use_tool" { return }
     let id = v["request_id"].as_str().unwrap_or_default();
     // One card at a time; a second concurrent question is declined rather than lost.
-    if r["tool_name"] == "AskUserQuestion" && g.question.is_none() {
+    if r["tool_name"] == "ExitPlanMode" && g.planning_start.is_some() {
+        if let Some(plan) = r["input"]["plan"].as_str() { g.native_plan = Some(plan.into()); }
+        // Settle native approval without granting execution. Review happens after this process exits.
+        reply(g, id, json!({"behavior": "deny", "message": "The plan is saved for review in Island. Stop here; do not implement or request approval again."}));
+    } else if r["tool_name"] == "AskUserQuestion" && g.question.is_none() {
         g.question = Some(Question { request_id: id.into(), input: r["input"].clone() });
     } else {
         let why = if r["tool_name"] == "AskUserQuestion" { "Another question is already open; ask one at a time." } else { "This chat can't ask for tool permission. Ask the user to pick a more permissive mode." };
@@ -492,7 +501,7 @@ impl Chats {
             agent: agent.into(),
             cwd: cwd.into(),
             title,
-            state: Mutex::new(State { transcript: Transcript::default(), status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None, handoff_token: 0, last: None, stdin: None, question: None }),
+            state: Mutex::new(State { transcript: Transcript::default(), plans: PlanBook::default(), planning_start: None, native_plan: None, previous_mode: None, status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None, handoff_token: 0, last: None, stdin: None, question: None }),
         });
         self.list.lock().unwrap_or_else(|e| e.into_inner()).insert(id, chat.clone());
         Self::turn(tools, &chat, text, images, settings)?;
@@ -658,6 +667,7 @@ impl Chats {
             "status": g.status.name(), "error": g.error, "sessionId": g.transcript.session_id,
             "handoff": g.handoff, "handoffError": g.handoff_error, "settings": g.last,
             "question": g.question.as_ref().map(|q| &q.input),
+            "plans": g.plans.documents(),
             "rev": g.transcript.rev, "entries": g.transcript.since(since),
         }))
     }
@@ -673,7 +683,18 @@ impl Chats {
         ids.into_iter().for_each(|id| self.stop(id));
     }
 
+    pub fn plan_action(&self, tools: &Tools, id: u64, version: u64, action: &str, feedback: Option<&str>) -> Result<(), String> {
+        let chat = self.get(id)?;
+        if chat.agent != "claude" { return Err("Continue this plan in its source session.".into()); }
+        Self::turn_inner(tools, &chat, "", vec![], Settings::default(), Some((version, action, feedback.unwrap_or_default())))
+    }
+
     fn turn(tools: &Tools, chat: &Arc<Chat>, text: &str, images: Vec<Image>, settings: Settings) -> Result<(), String> {
+        Self::turn_inner(tools, chat, text, images, settings, None)
+    }
+
+    fn turn_inner(tools: &Tools, chat: &Arc<Chat>, text: &str, images: Vec<Image>, mut settings: Settings, decision: Option<(u64, &str, &str)>) -> Result<(), String> {
+        let mut text = text.to_string();
         let session = {
             let mut g = chat.lock();
             if g.handoff.is_some() {
@@ -682,6 +703,22 @@ impl Chats {
             if g.status == Status::Running {
                 return Err("The agent is still working.".into());
             }
+            if let Some((version, action, feedback)) = decision {
+                g.plans.decide(version, action, feedback)?;
+                if action == "reject" { return Ok(()); }
+                let markdown = g.plans.documents().iter().find(|p| p.version == version).unwrap().markdown.clone();
+                settings = g.last.clone().unwrap_or_default();
+                if action == "implement" {
+                    settings.mode = g.previous_mode.clone();
+                    text = format!("Implement plan version {version} exactly as reviewed:\n\n{markdown}");
+                } else {
+                    settings.mode = Some("plan".into());
+                    text = format!("Revise plan version {version}. Stay in planning mode; do not implement.\n\nReviewed plan:\n{markdown}\n\nFeedback:\n{feedback}");
+                }
+            }
+            if settings.mode.as_deref() == Some("plan") && g.last.as_ref().is_some_and(|s| s.mode.as_deref() != Some("plan")) {
+                g.previous_mode = g.last.as_ref().and_then(|s| s.mode.clone());
+            }
             g.transcript.turn += 1;
             // A change back to all-Default still shows, so the user sees that a choice was turned off.
             let caption = match (&g.last, settings.caption()) {
@@ -689,17 +726,39 @@ impl Chats {
                 (Some(_), c) if c.is_empty() => "Default".to_string(),
                 (_, c) => c,
             };
-            g.transcript.user(text, caption, images.len());
+            g.transcript.user(if decision.is_some_and(|(_, a, _)| a == "implement") { "Implement the plan." } else { &text }, caption, images.len());
+            g.planning_start = None;
+            g.native_plan = None;
+            if chat.agent == "claude" && settings.mode.as_deref() == Some("plan") {
+                let anchor = g.transcript.push(Entry::new("plan", ""));
+                g.plans.begin(anchor);
+                g.planning_start = Some(anchor + 1);
+            }
             g.last = Some(settings.clone());
             g.error = None;
             g.stopping = false;
             g.status = Status::Running;
             g.transcript.session_id.clone()
         };
-        let spawned = command(tools, &chat.agent, &chat.cwd, text, session.as_deref(), &settings).and_then(|mut c| c.spawn().map_err(|e| e.to_string()));
+        let spawned = command(tools, &chat.agent, &chat.cwd, &text, session.as_deref(), &settings).and_then(|mut c| {
+            // Resuming Claude otherwise restores the session's saved Plan mode even with no flag.
+            if decision.is_some_and(|(_, a, _)| a == "implement") && settings.mode.is_none() {
+                c.args(["--permission-mode", "default"]);
+            }
+            c.spawn().map_err(|e| e.to_string())
+        });
         let mut child = match spawned {
             Ok(c) => c,
-            Err(e) => { Self::fail(chat, &e); return Ok(()); },
+            Err(e) => {
+                let mut g = chat.lock();
+                g.transcript.error(&e);
+                g.error = Some(e.clone());
+                g.status = Status::Failed;
+                g.planning_start = None;
+                g.plans.finish(false, Some(e.clone()));
+                if let Some((version, _, _)) = decision { g.plans.launch_failed(version, &e); return Err(e); }
+                return Ok(());
+            },
         };
         {
             let mut g = chat.lock();
@@ -726,6 +785,7 @@ impl Chats {
                 s
             });
             let mut finished = false;
+            let mut plan_success = false;
             for line in BufReader::new(out).lines().map_while(Result::ok) {
                 let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
                 let mut g = chat.lock();
@@ -733,7 +793,17 @@ impl Chats {
                     control(&mut g, &v);
                     continue;
                 }
+                if v["type"] == "assistant" {
+                    for b in v["message"]["content"].as_array().into_iter().flatten() {
+                        if b["name"] == "ExitPlanMode" { if let Some(p) = b["input"]["plan"].as_str() { g.native_plan = Some(p.into()); } }
+                    }
+                }
+                if v["type"] == "result" { plan_success = v["is_error"] == false && v["subtype"].as_str().is_none_or(|s| s == "success"); }
                 finished |= if chat.agent == "claude" { g.transcript.apply_claude(&v) } else { g.transcript.apply_codex(&v) };
+                if let Some(start) = g.planning_start {
+                    let markdown = g.native_plan.clone().unwrap_or_else(|| g.transcript.entries[start..].iter().filter(|e| e.kind == "assistant").map(|e| e.text.as_str()).collect::<Vec<_>>().join("\n\n"));
+                    g.plans.update(&markdown);
+                }
                 if finished { g.stdin = None } // closing stdin lets `claude -p` exit
             }
             let code = child.wait().ok().and_then(|s| s.code());
@@ -742,6 +812,10 @@ impl Chats {
             g.pid = None;
             g.stdin = None;
             g.question = None;
+            if g.planning_start.take().is_some() {
+                let success = plan_success && finished && code == Some(0) && !g.stopping;
+                g.plans.finish(success, if success { None } else { Some("Plan generation did not complete. Retry planning.".into()) });
+            }
             if g.stopping {
                 g.transcript.notice("Stopped");
                 g.status = Status::Idle;
@@ -758,10 +832,4 @@ impl Chats {
         Ok(())
     }
 
-    fn fail(chat: &Chat, msg: &str) {
-        let mut g = chat.lock();
-        g.transcript.error(msg);
-        g.error = Some(msg.into());
-        g.status = Status::Failed;
-    }
 }
