@@ -123,12 +123,14 @@ final class CoreBridge {
 
     func start() throws {
         let hook = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/island-hook").path
-        let config: [String: Any] = [
+        var config: [String: Any] = [
             "supportDir": Self.supportDir.path,
             // Test hook: point integrations at a scratch home instead of the real one.
             "home": ProcessInfo.processInfo.environment["AGENT_ISLAND_HOME"] ?? NSHomeDirectory(),
             "hookSource": hook,
         ]
+        // Test hook: a scratch socket lets a second build run beside the installed app.
+        if let sock = ProcessInfo.processInfo.environment["AGENT_ISLAND_SOCKET"] { config["socket"] = sock }
         let ctx = Unmanaged.passUnretained(self).toOpaque()
         let err = Self.json(config).withCString { cfg in
             island_start(cfg, { json, ctx in

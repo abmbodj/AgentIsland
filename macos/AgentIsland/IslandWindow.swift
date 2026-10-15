@@ -130,13 +130,13 @@ final class IslandController {
         reposition()
         #if DEBUG
         let dnc = DistributedNotificationCenter.default()
-        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.jump"), object: nil, queue: .main) { [weak self] n in
+        observers.append((dnc, dnc.addObserver(forName: Self.debugName("jump"), object: nil, queue: .main) { [weak self] n in
             if let id = n.object as? String, let s = self?.snapshot.sessions.first(where: { $0.id == id }) { self?.jump(s) }
         }))
-        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.openGroup"), object: nil, queue: .main) { [weak self] n in
+        observers.append((dnc, dnc.addObserver(forName: Self.debugName("openGroup"), object: nil, queue: .main) { [weak self] n in
             if let id = n.object as? String { self?.model.openGroups.insert(id) }
         }))
-        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.respond"), object: nil, queue: .main) { [weak self] n in
+        observers.append((dnc, dnc.addObserver(forName: Self.debugName("respond"), object: nil, queue: .main) { [weak self] n in
             guard let self, let what = n.object as? String else { return }
             guard let (_, item) = self.model.current else { if what == "undo" { self.model.undo() }; return }
             switch what {
@@ -149,11 +149,11 @@ final class IslandController {
             default: break
             }
         }))
-        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.expand"), object: nil, queue: .main) { [weak self] n in
+        observers.append((dnc, dnc.addObserver(forName: Self.debugName("expand"), object: nil, queue: .main) { [weak self] n in
             self?.setExpanded((n.object as? String) != "collapse", pinned: true)
         }))
         // "agent|message": start a chat from the composer, as if typed.
-        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.compose"), object: nil, queue: .main) { [weak self] n in
+        observers.append((dnc, dnc.addObserver(forName: Self.debugName("compose"), object: nil, queue: .main) { [weak self] n in
             guard let self, let raw = n.object as? String else { return }
             let parts = raw.split(separator: "|", maxSplits: 1).map(String.init)
             guard parts.count == 2 else { return }
@@ -163,10 +163,14 @@ final class IslandController {
             self.model.startChat()
         }))
         // Replace the snapshot with an empty one (the next real change overwrites it): the "no sessions" state.
-        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.emptySnapshot"), object: nil, queue: .main) { [weak self] _ in self?.update(Snapshot()) }))
-        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.back"), object: nil, queue: .main) { [weak self] _ in self?.model.closeChat() }))
+        observers.append((dnc, dnc.addObserver(forName: Self.debugName("emptySnapshot"), object: nil, queue: .main) { [weak self] _ in self?.update(Snapshot()) }))
+        observers.append((dnc, dnc.addObserver(forName: Self.debugName("back"), object: nil, queue: .main) { [weak self] _ in self?.model.goBack() }))
+        observers.append((dnc, dnc.addObserver(forName: Self.debugName("newchat"), object: nil, queue: .main) { [weak self] _ in
+            self?.setExpanded(true, pinned: true)
+            self?.model.openCompose()
+        }))
         // Writes a PNG of the island window to a path under /tmp (no Screen Recording permission needed).
-        observers.append((dnc, dnc.addObserver(forName: .init("com.abmbodj.agentisland.debug.snapshot"), object: nil, queue: .main) { [weak self] n in
+        observers.append((dnc, dnc.addObserver(forName: Self.debugName("snapshot"), object: nil, queue: .main) { [weak self] n in
             guard let path = n.object as? String, path.hasPrefix("/tmp/") || path.hasPrefix("/private/tmp/"),
                   let v = self?.panel.contentView,
                   let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return }
@@ -175,6 +179,13 @@ final class IslandController {
         }))
         #endif
     }
+
+    #if DEBUG
+    /// AGENT_ISLAND_DEBUG_ID makes this build answer only to its own debug notifications (e.g. beside another build).
+    private static func debugName(_ n: String) -> Notification.Name {
+        .init("com.abmbodj.agentisland.debug." + n + (ProcessInfo.processInfo.environment["AGENT_ISLAND_DEBUG_ID"] ?? ""))
+    }
+    #endif
 
     func close() {
         monitors.forEach(NSEvent.removeMonitor)
@@ -229,7 +240,7 @@ final class IslandController {
         openTimer?.cancel()
         closeTimer?.cancel()
         pinned = on && pin
-        if !on { autoOpened = false; model.closeChat() }
+        if !on { autoOpened = false; model.closeChat(animated: false) }
         guard on != expanded else { render(animated: true); return }
         expanded = on
         render(animated: true)
@@ -284,16 +295,16 @@ final class IslandController {
         let typing = panel.firstResponder is NSTextView
         let cmd = e.modifierFlags.contains(.command)
         let chars = e.charactersIgnoringModifiers?.lowercased() ?? ""
-        if cmd, chars == "[", model.chat != nil { // ⌘[ : back to the session list
-            model.closeChat()
+        if cmd, chars == "[", model.canGoBack { // ⌘[ : back to the session list
+            model.goBack()
             return true
         }
         if e.keyCode == 53 { // Esc
             if model.staged != nil {
                 model.undo()
-            } else if model.chat != nil {
-                // In a conversation Esc steps back, but never throws away a draft.
-                if model.draft.isEmpty { model.closeChat() } else { endSummon(collapse: false) }
+            } else if model.canGoBack {
+                // Inside a chat Esc steps back, but never throws away a draft.
+                if model.draft.isEmpty { model.goBack() } else { endSummon(collapse: false) }
             } else {
                 endSummon(collapse: true)
             }
@@ -337,7 +348,7 @@ final class IslandController {
         } else {
             openTimer?.cancel()
             // An open conversation stays until Back or a click outside; hover-out must not drop it mid-turn.
-            if expanded && !pinned && !autoOpened && model.chat == nil {
+            if expanded && !pinned && !autoOpened && !model.canGoBack {
                 let w = DispatchWorkItem { [weak self] in self?.setExpanded(false, pinned: false) }
                 closeTimer = w
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: w)

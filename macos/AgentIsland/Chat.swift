@@ -75,13 +75,47 @@ enum ChatBlock: Equatable {
 
 // MARK: - Model
 
+enum Screen: Equatable { case list, compose, chat }
+
 extension PanelModel {
     static let listWidth: CGFloat = 440
     static let chatWidth: CGFloat = 640
     static let chatHeight: CGFloat = 560
 
-    /// Panel width: the list, or the wider conversation.
+    /// Panel width: the list and new-chat screen, or the wider conversation.
     var width: CGFloat { chat != nil ? Self.chatWidth : Self.listWidth }
+
+    /// With no sessions and no chats there is nothing to list, so the new-chat screen is the home screen.
+    var hasHistory: Bool { !snapshot.sessions.isEmpty || !chats.isEmpty }
+
+    var screen: Screen {
+        if chat != nil { return .chat }
+        return composing || !hasHistory ? .compose : .list
+    }
+
+    var canGoBack: Bool { chat != nil || (composing && hasHistory) }
+
+    /// Slide to another screen: the direction is set first, then the change lands on the next turn
+    /// of the run loop, so the outgoing screen's removal transition already knows which way to leave.
+    func navigate(forward: Bool, _ change: @escaping () -> Void) {
+        navForward = forward
+        DispatchQueue.main.async { change() }
+    }
+
+    func openCompose() {
+        navigate(forward: true) { [self] in
+            composeError = nil
+            composing = true
+        }
+    }
+
+    func goBack() {
+        if chat != nil {
+            closeChat()
+        } else if composing {
+            navigate(forward: false) { [self] in composing = false }
+        }
+    }
 
     /// Claude Code or Codex, remembered.
     var composerAgent: String {
@@ -124,22 +158,29 @@ extension PanelModel {
     }
 
     func openChat(_ c: ChatInfo) {
-        entries = []
-        rev = 0
-        chatStatus = c.status
-        chatError = nil
-        disconnected = false
-        composeError = nil
-        chat = c
-        pollChat()
-        startPolling()
+        navigate(forward: true) { [self] in
+            entries = []
+            rev = 0
+            chatStatus = c.status
+            chatError = nil
+            disconnected = false
+            composeError = nil
+            chat = c
+            pollChat()
+            startPolling()
+        }
     }
 
-    func closeChat() {
-        chat = nil
-        entries = []
-        composeError = nil
-        refreshChats()
+    /// Back to the session list; not animated when the panel is collapsing.
+    func closeChat(animated: Bool = true) {
+        let change = { [self] in
+            chat = nil
+            entries = []
+            composeError = nil
+            composing = false
+            refreshChats()
+        }
+        if animated { navigate(forward: false, change) } else { change() }
     }
 
     /// Start a new chat from the composer.

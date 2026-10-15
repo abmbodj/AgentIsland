@@ -5,7 +5,7 @@ private let secondary = Color(nsColor: Theme.secondary)
 private let muted = Color(nsColor: Theme.muted)
 private let amber = Color(nsColor: Theme.amber)
 
-private var easing: Animation? { Theme.reduceMotion ? nil : .easeOut(duration: 0.15) }
+private var easing: Animation? { Motion.quick }
 
 // MARK: - Composer
 
@@ -135,13 +135,17 @@ struct Composer: View {
                     placeholder: mode == .new ? "Start a new session…" : (running ? "Draft your next message…" : "Reply…"),
                     focusTick: focusTick,
                     onSend: { if !running { submit() } },
-                    onFocus: { model.onSummon() }
+                    onFocus: {
+                        if mode == .new { model.composing = true } // typing here: don't let the screen change underneath
+                        model.onSummon()
+                    }
                 )
                 .frame(maxWidth: .infinity)
                 Button {
                     if running { model.stopChat() } else { submit() }
                 } label: {
                     Image(systemName: running ? "stop.fill" : "arrow.up")
+                        .contentTransition(.symbolEffect(.replace))
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(running || !blank ? Color.black : muted)
                         .frame(width: 24, height: 24)
@@ -151,6 +155,8 @@ struct Composer: View {
                 .buttonStyle(.plain)
                 .disabled(!running && blank)
                 .padding(.bottom, 2)
+                .animation(Motion.quick, value: running)
+                .animation(Motion.quick, value: blank)
                 .accessibilityLabel(running ? "Stop" : (mode == .new ? "Start session" : "Send message"))
                 .help(running ? "Stop this turn" : "Send (Return)")
             }
@@ -239,19 +245,7 @@ struct ChatView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Button { model.closeChat() } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.left").font(.system(size: 10, weight: .semibold))
-                    Text("Sessions").font(.system(size: 12))
-                }
-                .foregroundStyle(secondary)
-                .padding(.horizontal, 8)
-                .frame(height: 26)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(IslandButtonStyle(radius: 6))
-            .accessibilityLabel("Back to sessions")
-            .help("Back to sessions (⌘[)")
+            BackButton { model.goBack() }
             Spacer(minLength: 0)
             if let c = model.chat {
                 AgentMark(agent: c.agent, size: 12).accessibilityHidden(true)
@@ -272,7 +266,7 @@ struct ChatView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     if model.entries.isEmpty { empty }
                     ForEach(model.entries) { e in
-                        EntryView(entry: e, needsApproval: needsApproval)
+                        EntryView(entry: e, needsApproval: needsApproval).transition(.rise)
                     }
                     if model.chatStatus == "running" && !model.disconnected {
                         HStack(spacing: 6) {
@@ -281,7 +275,7 @@ struct ChatView: View {
                         }
                         .accessibilityElement(children: .combine)
                     }
-                    banner
+                    banner.transition(.rise)
                     Color.clear.frame(height: 1).id("bottom")
                         .background(GeometryReader { g in Color.clear.preference(key: BottomKey.self, value: g.frame(in: .named("chat")).minY) })
                 }
@@ -289,6 +283,9 @@ struct ChatView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 12)
+                // Only appends animate; text growing inside the last message is not a count change.
+                .animation(Motion.quick, value: model.entries.count)
+                .animation(Motion.quick, value: model.chatStatus)
             }
             .coordinateSpace(name: "chat")
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewport = $0 }
@@ -319,9 +316,11 @@ struct ChatView: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, 8)
+                    .transition(Theme.reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.94)))
                     .accessibilityLabel("Scroll to latest message")
                 }
             }
+            .animation(Motion.quick, value: follow)
         }
     }
 
@@ -353,7 +352,7 @@ struct ChatView: View {
     @ViewBuilder private var banner: some View {
         if model.disconnected {
             Banner(title: "Lost connection to this session", detail: "It may have ended when Agent Island restarted. Your earlier messages stay above.") {
-                BannerButton(title: "Back to sessions") { model.closeChat() }
+                BannerButton(title: "Back to sessions") { model.goBack() }
             }
         } else if model.chatStatus == "failed" {
             Banner(title: "This session stopped unexpectedly", detail: "Your last message may not have been received.") {
@@ -562,6 +561,7 @@ private struct ToolRow: View {
                     if entry.input.isEmpty && entry.output.isEmpty { Text("No details yet").font(.system(size: 11)).foregroundStyle(muted) }
                 }
                 .padding(.leading, 17)
+                .transition(.opacity)
             }
         }
     }
@@ -578,6 +578,85 @@ private struct ToolRow: View {
             }
             .frame(maxHeight: 140)
             .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+// MARK: - New chat
+
+struct BackButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.left").font(.system(size: 10, weight: .semibold))
+                Text("Sessions").font(.system(size: 12))
+            }
+            .foregroundStyle(secondary)
+            .padding(.horizontal, 8)
+            .frame(height: 26)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(IslandButtonStyle(radius: 6))
+        .accessibilityLabel("Back to sessions")
+        .help("Back to sessions (⌘[)")
+    }
+}
+
+/// The chat icon in the session list's footer.
+struct NewChatButton: View {
+    @ObservedObject var model: PanelModel
+
+    var body: some View {
+        Button { model.openCompose() } label: {
+            Image(systemName: "bubble.left")
+                .font(.system(size: 13))
+                .foregroundStyle(secondary)
+                .frame(width: 30, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(IslandButtonStyle(radius: 8))
+        .accessibilityLabel("New chat")
+        .help("New chat")
+    }
+}
+
+/// Where a typed message starts a session. With nothing running it is the panel's home screen and keeps
+/// the "no sessions" prompt; otherwise it is one step from the list.
+struct NewChatView: View {
+    @ObservedObject var model: PanelModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if model.hasHistory {
+                HStack {
+                    BackButton { model.goBack() }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 2)
+                .padding(.bottom, 4)
+            }
+            CardArea(model: model)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    AgentMark(agent: "claude", size: 14)
+                    AgentMark(agent: "codex", size: 14)
+                }
+                .padding(.bottom, 6)
+                .accessibilityHidden(true)
+                Text(model.hasHistory ? "New session" : "No agent sessions")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(ink)
+                Text(model.hasHistory ? "Describe the task. The agent starts in the folder below." : "Type below to start one, or open Claude Code or Codex.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .accessibilityElement(children: .combine)
+            Composer(model: model, mode: .new)
+                .padding(.top, 6)
         }
     }
 }
