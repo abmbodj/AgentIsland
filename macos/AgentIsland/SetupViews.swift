@@ -94,32 +94,37 @@ struct SetupView: View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Set up Agent Island").font(.title2.weight(.semibold))
-                Text("Agent Island sees your agents through their own hooks. Review each change below. You can undo all of it from the menu bar, and nothing leaves this Mac.")
+                Text("Connects Claude Code and Codex through their own hooks, opens at login and keeps itself updated. You can undo all of it from the menu bar, and nothing leaves this Mac.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if items.isEmpty {
-                Text("Your agents are already connected.").foregroundStyle(.secondary)
-            }
-            ForEach(items) { item in
-                ChangeRow(
-                    title: item.title,
-                    detail: (item.path as NSString).abbreviatingWithTildeInPath + (item.note.map { "\n" + $0 } ?? ""),
-                    diff: item.diff,
-                    isOn: Binding(get: { selected.contains(item.id) }, set: { on in
-                        if on { selected.insert(item.id) } else { selected.remove(item.id) }
-                    })
-                )
-            }
+            DisclosureGroup("Review changes") {
+                VStack(alignment: .leading, spacing: 18) {
+                    if items.isEmpty {
+                        Text("Your agents are already connected.").foregroundStyle(.secondary)
+                    }
+                    ForEach(items) { item in
+                        ChangeRow(
+                            title: item.title,
+                            detail: (item.path as NSString).abbreviatingWithTildeInPath + (item.note.map { "\n" + $0 } ?? ""),
+                            diff: item.diff,
+                            isOn: Binding(get: { selected.contains(item.id) }, set: { on in
+                                if on { selected.insert(item.id) } else { selected.remove(item.id) }
+                            })
+                        )
+                    }
 
-            if !editors.isEmpty && !EditorExtension.anyInstalled {
-                ChangeRow(
-                    title: "Exact terminal jump in \(editors.map(\.name).joined(separator: " and "))",
-                    detail: "Installs the small Agent Island Jump extension (\(EditorExtension.id)) so a click can show the right integrated terminal.",
-                    diff: nil,
-                    isOn: $editorJump
-                )
+                    if !editors.isEmpty && !EditorExtension.anyInstalled {
+                        ChangeRow(
+                            title: "Exact terminal jump in \(editors.map(\.name).joined(separator: " and "))",
+                            detail: "Installs the small Agent Island Jump extension (\(EditorExtension.id)) so a click can show the right integrated terminal.",
+                            diff: nil,
+                            isOn: $editorJump
+                        )
+                    }
+                }
+                .padding(.top, 10)
             }
 
             Divider()
