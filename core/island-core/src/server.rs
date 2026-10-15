@@ -485,11 +485,12 @@ impl Core {
             "chatOptions" => Ok(self.options.get(&self.tools(), req["refresh"] == true)),
             "chatStart" => {
                 let s = |k: &str| req[k].as_str().unwrap_or_default();
-                turn_settings(&req).and_then(|t| self.chats.start(&self.tools(), s("agent"), s("cwd"), s("text"), t)).map(|id| json!({"id": id}))
+                turn_settings(&req).and_then(|t| self.chats.start(&self.tools(), s("agent"), s("cwd"), s("text"), turn_images(&req), t)).map(|id| json!({"id": id}))
             }
             "chatSend" => turn_settings(&req)
-                .and_then(|t| self.chats.send(&self.tools(), req["id"].as_u64().unwrap_or_default(), req["text"].as_str().unwrap_or_default(), t))
+                .and_then(|t| self.chats.send(&self.tools(), req["id"].as_u64().unwrap_or_default(), req["text"].as_str().unwrap_or_default(), turn_images(&req), t))
                 .map(|_| Value::Null),
+            "chatAnswer" => self.chats.answer(req["id"].as_u64().unwrap_or_default(), req.get("answers").filter(|a| a.is_object()).cloned()).map(|_| Value::Null),
             "chatHandoff" => self.chats.request_handoff(req["id"].as_u64().unwrap_or_default(), req["target"].as_str().unwrap_or_default()).map(|_| Value::Null),
             "chatHandoffCancel" => self.chats.cancel_handoff(req["id"].as_u64().unwrap_or_default()).map(|_| Value::Null),
             "chatHandoffClaim" => Ok(self.chats.claim_handoffs(&self.tools())),
@@ -526,6 +527,10 @@ impl Drop for Core {
 }
 
 /// A turn's optional `settings` object; absent means Default for everything.
+fn turn_images(req: &Value) -> Vec<crate::chat::Image> {
+    serde_json::from_value(req["images"].clone()).unwrap_or_default()
+}
+
 fn turn_settings(req: &Value) -> Result<crate::chat::Settings, String> {
     if req["settings"].is_null() {
         return Ok(Default::default());

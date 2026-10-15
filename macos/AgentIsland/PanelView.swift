@@ -41,6 +41,11 @@ final class PanelModel: ObservableObject {
     @Published var chatError: String?
     @Published var disconnected = false
     @Published var draft = ""
+    /// Images attached to the draft; sent with the next message.
+    @Published var images: [ChatImage] = []
+    /// The open chat's pending AskUserQuestion, and the options picked so far per question.
+    @Published var chatQuestion: ChatQuestionSet?
+    @Published var questionPicks: [String: Set<String>] = [:]
     /// The new-chat screen was opened on purpose (it also shows by itself when there is nothing else to show).
     @Published var composing = false
     /// The chat whose delete is awaiting its inline confirmation.
