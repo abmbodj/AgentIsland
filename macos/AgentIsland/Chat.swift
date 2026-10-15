@@ -63,6 +63,8 @@ struct ModelOption: Decodable, Equatable, Identifiable {
     var efforts: [String]
     var auto: Bool
     var fast: Bool
+    /// The newest of its family; older pinned versions sit in a submenu.
+    var latest = true
 }
 
 struct AgentOptions: Decodable, Equatable {
@@ -72,17 +74,17 @@ struct AgentOptions: Decodable, Equatable {
 }
 
 enum TurnLabels {
-    /// The modes the island offers; Claude's list starts with Default (empty id).
-    static func modes(_ agent: String) -> [(id: String, name: String)] {
+    /// The modes the island offers, with their glyphs; Claude's list starts with Default (empty id).
+    static func modes(_ agent: String) -> [(id: String, name: String, icon: String)] {
         agent == "codex"
-            ? [("read-only", "Read-only"), ("workspace-write", "Workspace write"), ("danger-full-access", "Full access")]
-            : [("", "Default"), ("plan", "Plan"), ("acceptEdits", "Accept edits"), ("auto", "Auto"), ("bypassPermissions", "Bypass")]
+            ? [("read-only", "Read-only", "eye"), ("workspace-write", "Workspace write", "folder"),
+               ("danger-full-access", "Full access", "exclamationmark.triangle")]
+            : [("", "Default", "gearshape"), ("plan", "Plan", "list.bullet.clipboard"), ("acceptEdits", "Accept edits", "pencil"),
+               ("auto", "Auto", "wand.and.stars"), ("bypassPermissions", "Bypass", "exclamationmark.triangle")]
     }
 
     // ponytail: mirrors Settings::caption in chat.rs; keep both in step.
     static func effort(_ e: String) -> String { e == "xhigh" ? "Extra high" : e.prefix(1).uppercased() + e.dropFirst() }
-
-    static func dangerous(_ mode: String?) -> Bool { mode == "bypassPermissions" || mode == "danger-full-access" }
 
     /// Effort levels, lowest first, so snapping can step down.
     static let order = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]

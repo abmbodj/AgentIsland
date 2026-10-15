@@ -195,8 +195,9 @@ struct Composer: View {
                         .accessibilityAddTraits(model.composerAgent == a ? .isSelected : [])
                     }
                 }
+                .fixedSize() // never squeezed; the folder name truncates first
             }
-            Spacer(minLength: 6)
+            Spacer(minLength: 0)
             TurnChips(
                 agent: chipAgent,
                 options: model.options[chipAgent],
@@ -205,14 +206,11 @@ struct Composer: View {
             )
             if mode == .new {
                 Button { model.chooseComposerDir() } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "folder").font(.system(size: 10))
-                        Text(model.composerDirName).font(.system(size: 11)).lineLimit(1).truncationMode(.middle)
+                    // A tight row (long model, long mode) drops the folder name first; the tooltip keeps the path.
+                    ViewThatFits(in: .horizontal) {
+                        Chip(icon: "folder", text: model.composerDirName, menu: false)
+                        Chip(icon: "folder", text: "", menu: false)
                     }
-                    .foregroundStyle(secondary)
-                    .padding(.horizontal, 8)
-                    .frame(height: 22)
-                    .contentShape(Rectangle())
                 }
                 .buttonStyle(IslandButtonStyle(radius: 6))
                 .help(model.composerDir)
@@ -224,7 +222,32 @@ struct Composer: View {
     }
 }
 
-/// Mode chip and Model·Effort chip: native menus, styled like the folder chip.
+/// One composer-row chip: secondary ink at rest, a faint lift on hover (DESIGN.md: 6-8% white lifts).
+private struct Chip: View {
+    var icon: String?
+    let text: String
+    var menu = true
+    @State private var hover = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let icon { Image(systemName: icon).font(.system(size: 10)).frame(width: 11) }
+            if !text.isEmpty {
+                Text(text).font(.system(size: 11)).lineLimit(1).truncationMode(.middle)
+                    .frame(maxWidth: menu ? 180 : nil, alignment: .leading) // a very long model name truncates; normal ones never do
+            }
+            if menu { Image(systemName: "chevron.up.chevron.down").font(.system(size: 7, weight: .semibold)).foregroundStyle(muted) }
+        }
+        .foregroundStyle(hover ? ink : secondary)
+        .padding(.horizontal, 6)
+        .frame(height: 22)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(hover ? 0.08 : 0)))
+        .contentShape(Rectangle())
+        .onHover { h in withAnimation(Motion.quick) { hover = h } }
+    }
+}
+
+/// Mode chip and Model chip: native menus, so items keep macOS checkmarks, sections and keyboard behaviour.
 private struct TurnChips: View {
     let agent: String
     let options: AgentOptions?
@@ -234,7 +257,12 @@ private struct TurnChips: View {
     private var models: [ModelOption] { options?.models ?? [] }
     private var current: ModelOption? { settings.model.flatMap { id in models.first { $0.id == id } } }
     private var modeID: String { settings.mode ?? (agent == "codex" ? "workspace-write" : "") }
-    private var modeName: String { TurnLabels.modes(agent).first { $0.id == modeID }?.name ?? "Default" }
+    private var modes: [(id: String, name: String, icon: String)] {
+        TurnLabels.modes(agent).filter { $0.id != "auto" || current?.auto != false }
+    }
+    private var mode: (id: String, name: String, icon: String) {
+        TurnLabels.modes(agent).first { $0.id == modeID } ?? ("", "Default", "gearshape")
+    }
     private var modelText: String {
         let parts = [settings.name ?? settings.model, settings.effort.map(TurnLabels.effort)].compactMap { $0 }
         return parts.isEmpty ? "Default" : parts.joined(separator: " · ")
@@ -246,27 +274,39 @@ private struct TurnChips: View {
         set(s)
     }
 
+    private var modelBinding: Binding<String> {
+        Binding(get: { settings.model ?? "" }, set: { id in update { $0.model = id.isEmpty ? nil : id } })
+    }
+
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
             Menu {
                 Picker("Mode", selection: Binding(get: { modeID }, set: { id in update { $0.mode = id.isEmpty ? nil : id } })) {
-                    ForEach(TurnLabels.modes(agent).filter { $0.id != "auto" || current?.auto != false }, id: \.id) {
-                        Text($0.name).tag($0.id)
-                    }
+                    ForEach(modes, id: \.id) { Label($0.name, systemImage: $0.icon).tag($0.id) }
                 }
                 .pickerStyle(.inline)
             } label: {
-                chip(icon: TurnLabels.dangerous(settings.mode) ? "exclamationmark.triangle" : nil, text: modeName)
+                Chip(icon: mode.icon, text: mode.name)
             }
             .menuStyle(.button).buttonStyle(IslandButtonStyle(radius: 6)).menuIndicator(.hidden).fixedSize()
-            .accessibilityLabel("Mode: \(modeName)")
+            .help("Mode")
+            .accessibilityLabel("Mode: \(mode.name)")
 
             Menu {
-                Picker("Model", selection: Binding(get: { settings.model ?? "" }, set: { id in update { $0.model = id.isEmpty ? nil : id } })) {
+                Picker("Model", selection: modelBinding) {
                     Text("Default").tag("")
-                    ForEach(models) { Text($0.name).tag($0.id) }
+                    ForEach(models.filter(\.latest)) { Text($0.name).tag($0.id) }
                 }
                 .pickerStyle(.inline)
+                let older = models.filter { !$0.latest }
+                if !older.isEmpty {
+                    Menu("Older models") {
+                        Picker("Older models", selection: modelBinding) {
+                            ForEach(older) { Text($0.name).tag($0.id) }
+                        }
+                        .pickerStyle(.inline)
+                    }
+                }
                 let levels = settings.effortLevels(in: options)
                 if !levels.isEmpty {
                     Picker("Effort", selection: Binding(get: { settings.effort ?? "" }, set: { e in update { $0.effort = e.isEmpty ? nil : e } })) {
@@ -276,29 +316,20 @@ private struct TurnChips: View {
                     .pickerStyle(.inline)
                 }
                 if agent == "claude", current?.fast == true {
-                    Toggle("Fast", isOn: Binding(get: { settings.fast }, set: { on in update { $0.fast = on } }))
+                    Divider()
+                    Toggle("Fast mode", isOn: Binding(get: { settings.fast }, set: { on in update { $0.fast = on } }))
                 }
                 if models.isEmpty {
                     Text(options?.loading == true ? "Loading models…" : (options?.error ?? "Models unavailable")).disabled(true)
                 }
             } label: {
-                chip(icon: settings.fast ? "bolt.fill" : nil, text: modelText)
+                Chip(icon: settings.fast ? "bolt.fill" : "cpu", text: modelText)
             }
             .menuStyle(.button).buttonStyle(IslandButtonStyle(radius: 6)).menuIndicator(.hidden).fixedSize()
-            .accessibilityLabel("Model: \(settings.name ?? settings.model ?? "Default"), effort \(settings.effort.map(TurnLabels.effort) ?? "Default")\(settings.fast ? ", fast" : "")")
+            .help("Model and effort")
+            .accessibilityLabel("Model: \(settings.name ?? settings.model ?? "Default")"
+                + (settings.effort.map { ", effort \(TurnLabels.effort($0))" } ?? "") + (settings.fast ? ", fast mode" : ""))
         }
-    }
-
-    private func chip(icon: String?, text: String) -> some View {
-        HStack(spacing: 4) {
-            if let icon { Image(systemName: icon).font(.system(size: 10)) }
-            Text(text).font(.system(size: 11)).lineLimit(1).truncationMode(.middle)
-            Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(muted)
-        }
-        .foregroundStyle(secondary)
-        .padding(.horizontal, 8)
-        .frame(height: 22)
-        .contentShape(Rectangle())
     }
 }
 
