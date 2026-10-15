@@ -12,6 +12,8 @@ struct ChatInfo: Decodable, Equatable, Identifiable {
     var status: String
     var sessionId: String?
     var error: String?
+    var handoff: ChatHandoff?
+    var handoffError: String?
 }
 
 struct ChatEntry: Decodable, Equatable, Identifiable {
@@ -33,6 +35,8 @@ struct ChatTranscript: Decodable {
     var sessionId: String?
     var rev: Int
     var entries: [ChatEntry]
+    var handoff: ChatHandoff?
+    var handoffError: String?
 }
 
 /// A reply split into prose and fenced code, so code gets a monospaced block with a Copy button.
@@ -204,7 +208,7 @@ extension PanelModel {
     /// Send the next turn in the open chat.
     func sendChat() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let c = chat, !text.isEmpty, chatStatus != "running" else { return }
+        guard let c = chat, c.handoff == nil, !text.isEmpty, chatStatus != "running" else { return }
         do {
             _ = try CoreBridge.shared.call(["op": "chatSend", "id": c.id, "text": text])
             draft = ""
@@ -218,7 +222,7 @@ extension PanelModel {
 
     /// After a failed turn: send the last message again.
     func retryChat() {
-        guard let c = chat, let last = entries.last(where: { $0.kind == "user" }) else { return }
+        guard let c = chat, c.handoff == nil, let last = entries.last(where: { $0.kind == "user" }) else { return }
         do {
             _ = try CoreBridge.shared.call(["op": "chatSend", "id": c.id, "text": last.text])
             chatStatus = "running"
@@ -252,7 +256,13 @@ extension PanelModel {
     }
 
     func refreshChats() {
-        if let list = try? CoreBridge.shared.call(["op": "chatList"], as: [ChatInfo].self), list != chats { chats = list }
+        if let list = try? CoreBridge.shared.call(["op": "chatList"], as: [ChatInfo].self) {
+            if list != chats { chats = list }
+            if let c = chat, let updated = list.first(where: { $0.id == c.id }) {
+                if chat?.handoff != updated.handoff { chat?.handoff = updated.handoff }
+                if chat?.handoffError != updated.handoffError { chat?.handoffError = updated.handoffError }
+            }
+        }
     }
 
     func pollChat() {
@@ -267,6 +277,8 @@ extension PanelModel {
             if chatStatus != t.status { chatStatus = t.status }
             if chatError != t.error { chatError = t.error }
             if chat?.sessionId != t.sessionId { chat?.sessionId = t.sessionId }
+            if chat?.handoff != t.handoff { chat?.handoff = t.handoff }
+            if chat?.handoffError != t.handoffError { chat?.handoffError = t.handoffError }
         } catch {
             disconnected = true
         }
@@ -279,12 +291,48 @@ extension PanelModel {
         var tick = 0
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
             guard let self else { return }
-            guard self.isOpen else { self.stopPolling(); return }
+            guard self.isOpen || self.chats.contains(where: { $0.handoff?.status == "queued" || $0.handoff?.status == "launching" }) else { self.stopPolling(); return }
             tick += 1
             if self.chat != nil {
                 self.pollChat()
-            } else if tick % 12 == 0 {
+            }
+            if tick % 12 == 0 {
                 self.refreshChats()
+                self.processHandoffs()
+            }
+        }
+    }
+
+    func requestHandoff(_ destination: HandoffDestination) {
+        guard let c = chat else { return }
+        do {
+            _ = try CoreBridge.shared.call(["op": "chatHandoff", "id": c.id, "target": destination.rawValue])
+            composeError = nil
+            refreshChats()
+            startPolling()
+            processHandoffs()
+        } catch { composeError = error.localizedDescription }
+    }
+
+    func cancelHandoff() {
+        guard let c = chat else { return }
+        do {
+            _ = try CoreBridge.shared.call(["op": "chatHandoffCancel", "id": c.id])
+            refreshChats()
+        } catch { composeError = error.localizedDescription }
+    }
+
+    /// A core claim is atomic across controllers; continue polling queued launches when collapsed.
+    func processHandoffs() {
+        guard let launches = try? CoreBridge.shared.call(["op": "chatHandoffClaim"], as: [HandoffLaunch].self) else { return }
+        if !launches.isEmpty { refreshChats() }
+        for launch in launches {
+            HandoffLauncher.open(launch) { [weak self] error in
+                var request: [String: Any] = ["op": "chatHandoffFinish", "id": launch.id]
+                if let error { request["error"] = error }
+                _ = try? CoreBridge.shared.call(request)
+                self?.refreshChats()
+                self?.pollChat()
             }
         }
     }
