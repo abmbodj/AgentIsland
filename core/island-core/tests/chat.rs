@@ -35,6 +35,88 @@ fn kinds(t: &Value) -> Vec<String> {
     t["entries"].as_array().unwrap().iter().map(|e| e["kind"].as_str().unwrap().to_string()).collect()
 }
 
+#[test]
+fn native_plan_outside_selected_plan_mode_becomes_reviewable() {
+    let script = r##"read first
+echo '{"type":"system","subtype":"init","session_id":"native-plan"}'
+echo '{"type":"control_request","request_id":"exit","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":"# Native proposal"}}}'
+read response
+echo "$response" > "$0.response"
+echo '{"type":"result","subtype":"success","is_error":false,"session_id":"native-plan"}'"##;
+    let (tools, root) = fixture("native-plan", &[("claude", script)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "make a proposal", vec![], s(None, None, Some("acceptEdits"), false)).unwrap();
+    let t = wait_for(&chats, id, "idle");
+    assert_eq!(t["plans"][0]["markdown"], "# Native proposal");
+    assert_eq!(t["plans"][0]["status"], "ready");
+    assert!(std::fs::read_to_string(root.join("bin/claude.response")).unwrap().contains("saved for review"));
+}
+
+#[test]
+fn implementing_in_default_waits_for_a_versioned_native_permission() {
+    let script = r##"read first
+if [ -f "$0.planned" ]; then
+  echo '{"type":"control_request","request_id":"write-1","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"result.txt","content":"revised"}}}'
+  read approval
+  echo "$approval" > "$0.approval"
+else
+  touch "$0.planned"
+  echo '{"type":"control_request","request_id":"exit","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":"# Write result.txt"}}}'
+  read response
+fi
+echo '{"type":"result","subtype":"success","is_error":false,"session_id":"permission-plan"}'"##;
+    let (tools, root) = fixture("plan-permission", &[("claude", script)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "plan", vec![], s(None, None, Some("plan"), false)).unwrap();
+    wait_for(&chats, id, "idle");
+    chats.plan_action(&tools, id, 1, "implement", None).unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    let t = loop {
+        let t = chats.transcript(id, 0).unwrap();
+        if !t["approval"].is_null() { break t; }
+        assert!(Instant::now() < end, "permission not offered: {t}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(t["approval"]["tool"], "Write");
+    assert!(chats.permission(id, "stale-request", true).is_err());
+    chats.permission(id, "write-1", true).unwrap();
+    assert!(chats.permission(id, "write-1", true).is_err());
+    let t = wait_for(&chats, id, "idle");
+    assert!(t["approval"].is_null());
+    let response: Value = serde_json::from_str(&std::fs::read_to_string(root.join("bin/claude.approval")).unwrap()).unwrap();
+    assert_eq!(response["response"]["response"]["behavior"], "allow");
+    assert_eq!(response["response"]["response"]["updatedInput"]["content"], "revised");
+}
+
+#[test]
+fn stop_immediately_invalidates_an_implementation_permission() {
+    let script = r##"read first
+if [ -f "$0.planned" ]; then
+  trap 'sleep 1; exit 0' TERM
+  echo '{"type":"control_request","request_id":"write-1","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"result.txt","content":"revised"}}}'
+  read approval
+else
+  touch "$0.planned"
+  echo '{"type":"control_request","request_id":"exit","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":"# Write result.txt"}}}'
+  read response
+fi
+echo '{"type":"result","subtype":"success","is_error":false,"session_id":"permission-stop"}'"##;
+    let (tools, root) = fixture("plan-permission-stop", &[("claude", script)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "plan", vec![], s(None, None, Some("plan"), false)).unwrap();
+    wait_for(&chats, id, "idle");
+    chats.plan_action(&tools, id, 1, "implement", None).unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    while chats.transcript(id, 0).unwrap()["approval"].is_null() {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    chats.stop(id);
+    assert!(chats.transcript(id, 0).unwrap()["approval"].is_null());
+    assert!(chats.permission(id, "write-1", true).is_err());
+    wait_for(&chats, id, "idle");
+}
+
 const CLAUDE: &str = r#"echo "$@" >> "$0.args"
 echo '{"type":"system","subtype":"init","session_id":"sess-1"}'
 echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m'$$'"}}}'
@@ -525,4 +607,121 @@ echo '{"type":"result","subtype":"success","is_error":false,"session_id":"s"}'"#
     let lines: Vec<&str> = log.lines().collect();
     assert!(lines[0].contains("\"request_id\":\"b1\"") && lines[0].contains("\"behavior\":\"deny\""), "{log}");
     assert!(lines[1].contains("\"request_id\":\"q1\"") && lines[1].contains("\"behavior\":\"deny\""), "{log}");
+}
+
+#[test]
+fn plans_stream_revise_and_implement_exact_version_once() {
+    let script = r##"echo "$@" >> "$0.args"
+read first; echo "$first" >> "$0.in"
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"plan-session"}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m'$$'"}}}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"# Full plan\n\n- preserve content"}}}'
+case " $* " in *"--permission-mode default"*) ;;
+*)
+printf '%s\n' '{"type":"control_request","request_id":"exit","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":"# Full plan\n\n- preserve content"}}}'
+read response; echo "$response" >> "$0.in"
+;; esac
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"plan-session"}'"##;
+    let (tools, root) = fixture("plan-review", &[("claude", script)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools,"claude",root.to_str().unwrap(),"plan",vec![],s(Some("opus"),Some("high"),Some("plan"),true)).unwrap();
+    let t = wait_for(&chats,id,"idle");
+    assert_eq!(t["plans"][0]["markdown"], "# Full plan\n\n- preserve content");
+    assert_eq!(t["plans"][0]["status"], "ready");
+    assert!(kinds(&t).contains(&"plan".into()));
+    assert!(chats.plan_action(&tools,id,1,"revise",Some("  ")).is_err());
+    chats.plan_action(&tools,id,1,"revise",Some("Use tests")).unwrap();
+    let t = wait_for(&chats,id,"idle");
+    assert_eq!(t["plans"][0]["status"], "superseded");
+    assert_eq!(t["plans"][1]["status"], "ready");
+    assert!(chats.plan_action(&tools,id,1,"implement",None).is_err());
+    chats.plan_action(&tools,id,2,"implement",None).unwrap();
+    assert!(chats.plan_action(&tools,id,2,"implement",None).is_err());
+    let t = wait_for(&chats,id,"idle");
+    assert!(t["settings"]["mode"].is_null());
+    let args=std::fs::read_to_string(root.join("bin/claude.args")).unwrap();
+    let lines: Vec<_> = args.lines().collect(); assert_eq!(lines.len(),3);
+    assert!(lines[1].contains("--permission-mode plan"));
+    assert!(lines[2].contains("--permission-mode default"));
+    assert!(lines[2].contains("--model opus --effort high"));
+    let input=std::fs::read_to_string(root.join("bin/claude.in")).unwrap();
+    assert!(input.contains("Use tests")); assert!(input.contains("Implement plan version 2"));
+    assert!(input.contains("preserve content"));
+    assert!(!input.contains("\"behavior\":\"allow\""));
+}
+
+#[test]
+fn incomplete_plans_are_unavailable_and_rejection_does_not_launch() {
+    let script = r##"printf '%s\n' '{"type":"assistant","message":{"id":"p","content":[{"type":"text","text":"# Partial"}]}}'
+exit 0"##;
+    let (tools,root)=fixture("plan-incomplete", &[("claude",script)]);
+    let chats=Chats::default();
+    let id=chats.start(&tools,"claude",root.to_str().unwrap(),"plan",vec![],s(None,None,Some("plan"),false)).unwrap();
+    let t=wait_for(&chats,id,"idle");
+    assert_eq!(t["plans"][0]["status"],"unavailable");
+    assert!(chats.plan_action(&tools,id,1,"implement",None).is_err());
+
+    let (tools,root)=fixture("plan-reject", &[("claude",CLAUDE)]);
+    let id=chats.start(&tools,"claude",root.to_str().unwrap(),"plan",vec![],s(None,None,Some("plan"),false)).unwrap();
+    wait_for(&chats,id,"idle");
+    chats.request_handoff(id,"terminal").unwrap();
+    assert!(chats.plan_action(&tools,id,1,"reject",None).is_err());
+    chats.cancel_handoff(id).unwrap();
+    chats.plan_action(&tools,id,1,"reject",None).unwrap();
+    assert_eq!(chats.transcript(id,0).unwrap()["plans"][0]["status"],"rejected");
+    assert_eq!(std::fs::read_to_string(root.join("bin/claude.args")).unwrap().lines().count(),1);
+}
+
+#[test]
+fn plan_launch_failure_can_retry_and_restores_previous_permissions() {
+    let (tools,root)=fixture("plan-retry", &[("claude",CLAUDE)]);
+    let chats=Chats::default();
+    let id=chats.start(&tools,"claude",root.to_str().unwrap(),"first",vec![],s(Some("opus"),None,Some("acceptEdits"),true)).unwrap();
+    wait_for(&chats,id,"idle");
+    chats.send(&tools,id,"plan",vec![],s(Some("opus"),None,Some("plan"),true)).unwrap();
+    wait_for(&chats,id,"idle");
+    std::fs::rename(root.join("bin/claude"),root.join("bin/saved")).unwrap();
+    assert!(chats.plan_action(&tools,id,1,"implement",None).is_err());
+    assert_eq!(chats.transcript(id,0).unwrap()["plans"][0]["status"],"ready");
+    std::fs::rename(root.join("bin/saved"),root.join("bin/claude")).unwrap();
+    std::thread::scope(|scope| {
+        let a=scope.spawn(|| chats.plan_action(&tools,id,1,"implement",None));
+        let b=scope.spawn(|| chats.plan_action(&tools,id,1,"implement",None));
+        assert_ne!(a.join().unwrap().is_ok(),b.join().unwrap().is_ok());
+    });
+    let t=wait_for(&chats,id,"idle");
+    assert_eq!(t["settings"]["mode"],"acceptEdits");
+    let args=std::fs::read_to_string(root.join("bin/claude.args")).unwrap();
+    assert_eq!(args.lines().count(),3); assert!(args.lines().last().unwrap().contains("--permission-mode acceptEdits"));
+}
+
+#[test]
+fn ordinary_turns_supersede_previous_ready_plan_even_when_new_planning_fails() {
+    for mode in [None, Some("plan")] {
+        let (tools, root) = fixture("plan-replaced", &[("claude", CLAUDE)]);
+        let chats = Chats::default();
+        let id = chats.start(&tools,"claude",root.to_str().unwrap(),"plan",vec![],s(None,None,Some("plan"),false)).unwrap();
+        wait_for(&chats,id,"idle");
+        std::fs::remove_file(root.join("bin/claude")).unwrap();
+        chats.send(&tools,id,"A different direction",vec![],s(None,None,mode,false)).unwrap();
+        let t = chats.transcript(id,0).unwrap();
+        assert_eq!(t["plans"][0]["status"],"superseded");
+        assert!(chats.plan_action(&tools,id,1,"implement",None).is_err());
+    }
+}
+
+#[test]
+fn explicit_revision_generation_failure_keeps_reviewed_plan_retryable() {
+    let (tools, root) = fixture("plan-revise-failed", &[("claude", CLAUDE)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools,"claude",root.to_str().unwrap(),"plan",vec![],s(None,None,Some("plan"),false)).unwrap();
+    let ready = wait_for(&chats,id,"idle");
+    let markdown = ready["plans"][0]["markdown"].clone();
+    std::fs::write(root.join("bin/claude"), "#!/bin/sh\nexit 1\n").unwrap();
+    chats.plan_action(&tools,id,1,"revise",Some("Use a different approach")).unwrap();
+    let failed = wait_for(&chats,id,"failed");
+    assert_eq!(failed["plans"][0]["status"], "ready");
+    assert_eq!(failed["plans"][0]["markdown"], markdown);
+    assert_eq!(failed["plans"][1]["status"], "unavailable");
+    chats.plan_action(&tools,id,1,"reject",None).unwrap();
 }

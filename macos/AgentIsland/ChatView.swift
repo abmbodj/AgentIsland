@@ -554,8 +554,15 @@ struct ChatView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if model.entries.isEmpty { empty }
-                    ForEach(model.entries) { e in
-                        EntryView(entry: e, needsApproval: needsApproval).transition(.rise)
+                    ForEach(model.planVisibleEntries) { e in
+                        if e.kind == "plan", let plan = model.plans.first(where: { $0.entryIndex == e.index }) {
+                            InlinePlan(model: model, plan: plan)
+                        } else {
+                            EntryView(entry: e, needsApproval: needsApproval).transition(.rise)
+                        }
+                    }
+                    if let approval = model.chatApproval {
+                        ChatPermissionCard(model: model, approval: approval)
                     }
                     if let q = model.chatQuestion {
                         QuestionCard(model: model, questions: q).transition(.rise)
@@ -1135,5 +1142,24 @@ struct ChatRow: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Opens this conversation")
         .accessibilityActions { Button("Delete chat") { model.confirmingDelete = chat.id } }
+    }
+}
+
+struct ChatPermissionCard: View {
+    @ObservedObject var model: PanelModel
+    let approval: ChatPermission
+    func answer(_ allow: Bool) {
+        guard let id = model.chat?.id else { return }
+        do {
+            _ = try CoreBridge.shared.call(["op": "chatPermission", "id": id, "requestId": approval.requestId, "allow": allow])
+            model.pollChat()
+        } catch { model.composeError = error.localizedDescription }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(approval.tool, systemImage: "exclamationmark.circle").font(.system(size: 13, weight: .semibold))
+            ScrollView { Text(approval.detail).font(.system(size: 12, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 100)
+            HStack { Button("Deny") { answer(false) }; Spacer(); Button("Allow once") { answer(true) } }.buttonStyle(.borderless)
+        }.padding(10).foregroundStyle(Color(nsColor: Theme.ink)).background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
     }
 }

@@ -84,7 +84,21 @@ struct ChatImage: Identifiable, Equatable {
     }
 }
 
+struct ChatPermission: Decodable, Equatable { var requestId: String; var tool: String; var detail: String }
+
+struct ChatPlan: Decodable, Equatable, Identifiable {
+    var version: Int
+    var markdown: String
+    var status: String
+    var entryIndex: Int?
+    var error: String?
+    var id: Int { version }
+}
+
 struct ChatTranscript: Decodable {
+    var plans: [ChatPlan]?
+    var approval: ChatPermission?
+    var settings: TurnSettings?
     var status: String
     var error: String?
     var sessionId: String?
@@ -254,7 +268,7 @@ extension PanelModel {
     static let chatHeight: CGFloat = 560
 
     /// Panel width: the list and new-chat screen, or the wider conversation.
-    var width: CGFloat { chat != nil ? Self.chatWidth : Self.listWidth }
+    var width: CGFloat { chat != nil || planReader != nil ? Self.chatWidth : Self.listWidth }
 
     /// With no sessions and no chats there is nothing to list, so the new-chat screen is the home screen.
     var hasHistory: Bool { !snapshot.sessions.isEmpty || !chats.isEmpty }
@@ -264,7 +278,7 @@ extension PanelModel {
         return composing || !hasHistory ? .compose : .list
     }
 
-    var canGoBack: Bool { chat != nil || (composing && hasHistory) }
+    var canGoBack: Bool { planReader != nil || chat != nil || (composing && hasHistory) }
 
     /// Slide to another screen: the direction is set first, then the change lands on the next turn
     /// of the run loop, so the outgoing screen's removal transition already knows which way to leave.
@@ -282,6 +296,7 @@ extension PanelModel {
     }
 
     func goBack() {
+        if planReader != nil { planReader = nil; return }
         if chat != nil {
             closeChat()
         } else if composing {
@@ -359,12 +374,16 @@ extension PanelModel {
     func tap(_ s: SessionInfo) {
         // The chat list is only polled while open, so a just-started chat may not be linked to its row yet.
         if chatFor(s) == nil { refreshChats() }
-        if let c = chatFor(s) { openChat(c) } else { onJump(s) }
+        if let c = chatFor(s) { openChat(c) } else if s.hasPlan { openSessionPlan(s) } else { onJump(s) }
     }
 
     func openChat(_ c: ChatInfo) {
         navigate(forward: true) { [self] in
             entries = []
+            plans = []
+            planReader = nil
+            planFeedback = ""
+            planError = nil
             rev = 0
             chatStatus = c.status
             chatError = nil
@@ -372,6 +391,7 @@ extension PanelModel {
             composeError = nil
             replySettings = nil
             chatQuestion = nil
+            chatApproval = nil
             questionPicks = [:]
             images = []
             loadOptions(refresh: true)
@@ -488,6 +508,7 @@ extension PanelModel {
         do {
             _ = try CoreBridge.shared.call(req)
             chatQuestion = nil
+            chatApproval = nil
             questionPicks = [:]
         } catch {
             composeError = error.localizedDescription
@@ -547,6 +568,10 @@ extension PanelModel {
         do {
             let t = try CoreBridge.shared.call(["op": "transcript", "id": c.id, "since": rev], as: ChatTranscript.self)
             if disconnected { disconnected = false }
+            if chatApproval != t.approval { chatApproval = t.approval }
+            if let next = t.plans?.last, next.status == "ready", (next.version > (plans.last?.version ?? 0) || plans.last?.status == "writing") { planFeedback = "" }
+            if plans != (t.plans ?? []) { plans = t.plans ?? [] }
+            if chat?.settings != t.settings { chat?.settings = t.settings }
             for e in t.entries {
                 if e.index < entries.count { entries[e.index] = e } else { entries.append(e) }
             }

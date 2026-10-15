@@ -16,7 +16,6 @@ const OPT_OUT: &[&str] = &[
     "item/reasoning/textDelta",
     "item/commandExecution/outputDelta",
     "item/fileChange/outputDelta",
-    "item/plan/delta",
     "thread/tokenUsage/updated",
     "turn/diff/updated",
     "turn/plan/updated",

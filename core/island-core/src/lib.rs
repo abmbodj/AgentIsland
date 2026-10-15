@@ -10,4 +10,5 @@ pub mod codex_appserver;
 pub mod procscan;
 pub mod pr;
 pub mod chat;
+pub mod plan;
 pub mod options;

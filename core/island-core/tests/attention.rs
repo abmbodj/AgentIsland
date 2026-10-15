@@ -275,3 +275,48 @@ fn plan_approval_is_a_handoff_the_hook_does_not_wait_on() {
     assert!(!a.held);
     assert_eq!(state(&s), State::NeedsInput);
 }
+
+#[test]
+fn connected_claude_plan_history_survives_resolution_and_deduplicates_hooks() {
+    let mut s = Store::default();
+    let request = claude("PermissionRequest-Bash", plan());
+    s.handle(&request, T0);
+    s.handle(&request, T0 + 1);
+    let snapshot = s.snapshot();
+    assert_eq!(snapshot.sessions[0].plans.len(), 1);
+    assert_eq!(snapshot.sessions[0].plans[0].markdown, "# Plan");
+    assert_eq!(snapshot.sessions[0].plans[0].status, "ready");
+    assert_eq!(pending(&s).len(), 1);
+    s.handle(&claude("PostToolUse-Bash", json!({"tool_name":"ExitPlanMode","tool_input":{}})), T0 + 2);
+    assert!(pending(&s).is_empty());
+    assert_eq!(s.snapshot().sessions[0].plans[0].status, "unavailable");
+    s.handle(&claude("PermissionRequest-Bash", json!({"tool_name":"ExitPlanMode","tool_input":{"plan":"# Revised\n\nFull document"}})), T0 + 3);
+    let snapshot = s.snapshot();
+    assert_eq!(snapshot.sessions[0].plans[1].version, 2);
+    assert_eq!(snapshot.sessions[0].plans[1].markdown, "# Revised\n\nFull document");
+    for (event, expected) in [("UserPromptSubmit", "superseded"), ("Stop", "unavailable"), ("Interrupt", "unavailable"), ("SessionEnd", "unavailable")] {
+        let mut s = Store::default();
+        s.handle(&request, T0);
+        s.handle(&claude("PermissionRequest-Bash", json!({"hook_event_name":event})), T0 + 1);
+        assert_eq!(s.snapshot().sessions[0].plans[0].status, expected, "{event}");
+        assert_eq!(s.snapshot().sessions[0].plans[0].markdown, "# Plan");
+    }
+}
+
+#[test]
+fn claude_plan_versions_follow_authoritative_request_identity() {
+    let mut s = Store::default();
+    s.handle(&claude("PreToolUse-Bash", plan()), T0);
+    assert!(s.snapshot().sessions[0].plans.is_empty());
+    let mut request = plan();
+    request["tool_use_id"] = json!("plan-one");
+    s.handle(&claude("PermissionRequest-Bash", request.clone()), T0 + 1);
+    request["tool_use_id"] = json!("plan-two");
+    s.handle(&claude("PermissionRequest-Bash", request.clone()), T0 + 2);
+    assert_eq!(s.snapshot().sessions[0].plans.len(), 2);
+    assert_eq!(s.snapshot().sessions[0].plans[0].status, "superseded");
+    s.handle(&claude("PostToolUse-Bash", json!({"tool_name":"ExitPlanMode","tool_input":{}})), T0 + 3);
+    s.handle(&claude("PermissionRequest-Bash", request), T0 + 4);
+    assert_eq!(s.snapshot().sessions[0].plans.len(), 2);
+    assert_eq!(s.snapshot().sessions[0].plans[1].status, "unavailable");
+}
