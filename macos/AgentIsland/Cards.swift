@@ -148,7 +148,8 @@ private struct CardView: View {
     // MARK: Approval
 
     private var approval: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let plan = item.tool == "ExitPlanMode"
+        return VStack(alignment: .leading, spacing: 10) {
             Text(item.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(ink)
             if let note = item.note, !note.isEmpty {
                 Text(note).font(.system(size: 12)).foregroundStyle(secondary).fixedSize(horizontal: false, vertical: true)
@@ -181,7 +182,7 @@ private struct CardView: View {
                 if showDiff { DiffLines(text: d.text) }
             }
             HStack(spacing: 8) {
-                ResponseButton(model: model, id: "deny", item: item, title: "Deny", shortcut: "⌘N") { model.deny(item) }
+                ResponseButton(model: model, id: "deny", item: item, title: plan ? "Keep planning" : "Deny", shortcut: "⌘N") { model.deny(item) }
                 if item.releasable {
                     Button { model.onJump(session) } label: {
                         Text("Answer in \(Fmt.agentName(session.agent))").font(.system(size: 12)).foregroundStyle(secondary).padding(.horizontal, 6).frame(height: 28).contentShape(Rectangle())
@@ -189,10 +190,10 @@ private struct CardView: View {
                     .buttonStyle(IslandButtonStyle())
                 }
                 if item.canAllowSession {
-                    ResponseButton(model: model, id: "session", item: item, title: "Allow for session") { model.allowSession(item) }
+                    ResponseButton(model: model, id: "session", item: item, title: plan ? "Accept, auto-edits" : "Allow for session") { model.allowSession(item) }
                 }
                 Spacer()
-                ResponseButton(model: model, id: "allow", item: item, title: "Allow", shortcut: "⌘Y", primary: true) { model.allow(item) }
+                ResponseButton(model: model, id: "allow", item: item, title: plan ? "Accept plan" : "Allow", shortcut: "⌘Y", primary: true) { model.allow(item) }
             }
         }
     }
