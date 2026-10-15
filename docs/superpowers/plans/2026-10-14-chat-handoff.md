@@ -8,7 +8,7 @@
 - Resume the exact native session with full native conversation history and original working folder.
 - Destinations: Apple Terminal, iTerm2, Ghostty; Claude Desktop for Claude and Codex Desktop for Codex.
 - Wait for the current answer to finish before launching; queued handoff can be cancelled.
-- Core rejects replies while queued/launching/opened; launch failure restores replies.
+- Core rejects replies while queued/launching/opened; initial launch failure restores replies. Late errors after opened preserve read-only history and offer external retry.
 - Never install a branch build. Test derived-data app, merge reviewed branch, install merged main.
 
 ### Task 1: Core lifecycle

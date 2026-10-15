@@ -157,8 +157,8 @@ enum HandoffLauncher {
         }
     }
 
-    /// Continue observing the process after dispatch: a slow startup failure still restores replies.
-    /// The core attempt token prevents an old window's exit from changing a newer handoff.
+    /// Continue observing the process after dispatch so delayed errors remain visible.
+    /// The core preserves archived history after dispatch; attempt tokens reject old windows' callbacks.
     static func watchTerminal(folder: URL, destination: HandoffDestination, report: @escaping (String?) -> Void) {
         TerminalLaunchWatch(folder: folder, destination: destination, report: report).start()
     }
@@ -238,6 +238,11 @@ private final class TerminalLaunchWatch {
     }
 
     private func poll() {
+        guard FileManager.default.fileExists(atPath: folder.path) else {
+            if !reported { report("The terminal launch receipt is no longer available. Try again.") }
+            stop()
+            return
+        }
         let status = (try? String(contentsOf: folder.appendingPathComponent("status"), encoding: .utf8)) ?? ""
         if status.hasPrefix("exited:") {
             if status != "exited:0" || !reported {

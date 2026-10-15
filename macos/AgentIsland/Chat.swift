@@ -305,8 +305,8 @@ extension PanelModel {
 
     func requestHandoff(_ destination: HandoffDestination) {
         guard let c = chat else { return }
-        if c.handoff?.status == "opened", let session = snapshot.sessions.first(where: {
-            $0.id == c.sessionId && $0.state != .ended && $0.terminal.bundleId == destination.bundleID
+        if c.handoff?.status == "opened", c.handoffError == nil, let session = snapshot.sessions.first(where: {
+            $0.id == c.sessionId && [.working, .idle, .needsInput].contains($0.state) && $0.terminal.bundleId == destination.bundleID
         }) {
             onJump(session)
             return
