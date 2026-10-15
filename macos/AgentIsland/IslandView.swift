@@ -29,7 +29,7 @@ final class IslandView: NSView {
     private(set) var hasNotch = true
     private let dot: CGFloat = 6, gap: CGFloat = 6, pad: CGFloat = 11, ear: CGFloat = 6, maxDots = 6
     /// List mode is 440 wide; an open chat widens to `PanelModel.chatWidth`.
-    private var panelWidth: CGFloat { model.chat != nil ? PanelModel.chatWidth : PanelModel.listWidth }
+    private var panelWidth: CGFloat { model.width }
     /// Room below the notch for the dropped-down panel (see `IslandController.reposition`).
     static let panelMaxHeight: CGFloat = 460
     /// Room below the notch when a chat is open.

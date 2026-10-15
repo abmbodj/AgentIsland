@@ -123,3 +123,16 @@ echo '{"type":"turn.completed"}'"#;
     assert_eq!(t["entries"][2]["status"], "error");
     assert_eq!(t["sessionId"], "th-1");
 }
+
+#[test]
+fn text_after_a_thinking_block_is_not_duplicated() {
+    let script = r#"echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"mm"}}}'
+echo '{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}}'
+echo '{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hi"}}}'
+echo '{"type":"assistant","message":{"id":"mm","content":[{"type":"text","text":"Hi"}]}}'
+echo '{"type":"result","subtype":"success","is_error":false}'"#;
+    let (tools, root) = fixture("think", &[("claude", script)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "go").unwrap();
+    assert_eq!(kinds(&wait_for(&chats, id, "idle")), ["user", "assistant"]);
+}

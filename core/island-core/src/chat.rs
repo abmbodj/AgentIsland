@@ -155,9 +155,15 @@ impl Transcript {
             Some("assistant") => {
                 let m = &v["message"];
                 let id = m["id"].as_str().unwrap_or_default().to_string();
-                for (i, b) in m["content"].as_array().into_iter().flatten().enumerate() {
+                // Streamed text is keyed by the stream's block index, which this event's array position
+                // doesn't match (thinking blocks); so when the stream already built the message, skip its text.
+                let streamed = self.entries.iter().any(|e| e.key.starts_with(&format!("{id}:")));
+                for b in m["content"].as_array().into_iter().flatten() {
                     match b["type"].as_str() {
-                        Some("text") => self.set_text(format!("{id}:{i}"), b["text"].as_str().unwrap_or_default(), false),
+                        Some("text") if !streamed => {
+                            let n = self.entries.iter().filter(|e| e.key.starts_with(&format!("{id}:"))).count();
+                            self.set_text(format!("{id}:{n}"), b["text"].as_str().unwrap_or_default(), false)
+                        }
                         Some("tool_use") => self.tool(b["id"].as_str().unwrap_or_default(), b["name"].as_str().unwrap_or_default(), &b["input"]),
                         _ => {}
                     }
@@ -346,9 +352,11 @@ impl Chats {
     pub fn stop(&self, id: u64) {
         if let Ok(chat) = self.get(id) {
             let mut g = chat.lock();
-            if let (Status::Running, Some(pid)) = (g.status, g.pid) {
-                g.stopping = true;
-                unsafe { libc::kill(-pid, libc::SIGTERM) };
+            if g.status == Status::Running {
+                g.stopping = true; // also covers a Stop that lands before the process is spawned
+                if let Some(pid) = g.pid {
+                    unsafe { libc::kill(-pid, libc::SIGTERM) };
+                }
             }
         }
     }
@@ -387,13 +395,20 @@ impl Chats {
             Ok(c) => c,
             Err(e) => return Self::fail(chat, &e),
         };
-        chat.lock().pid = Some(child.id() as i32);
+        {
+            let mut g = chat.lock();
+            g.pid = Some(child.id() as i32);
+            if g.stopping {
+                unsafe { libc::kill(-(child.id() as i32), libc::SIGTERM) };
+            }
+        }
         let (out, mut err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
         let chat = chat.clone();
         std::thread::spawn(move || {
             let stderr = std::thread::spawn(move || {
                 let mut s = String::new();
                 let _ = err.by_ref().take(64_000).read_to_string(&mut s);
+                let _ = std::io::copy(&mut err, &mut std::io::sink()); // keep draining so a chatty agent never blocks on a full pipe
                 s
             });
             let mut finished = false;

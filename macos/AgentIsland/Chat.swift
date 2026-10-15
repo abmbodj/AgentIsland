@@ -80,6 +80,9 @@ extension PanelModel {
     static let chatWidth: CGFloat = 640
     static let chatHeight: CGFloat = 560
 
+    /// Panel width: the list, or the wider conversation.
+    var width: CGFloat { chat != nil ? Self.chatWidth : Self.listWidth }
+
     /// Claude Code or Codex, remembered.
     var composerAgent: String {
         get { UserDefaults.standard.string(forKey: "composerAgent") ?? "claude" }
@@ -210,6 +213,7 @@ extension PanelModel {
     /// The core is pulled, never pushed: fast while a chat is on screen, slow for the row statuses.
     func startPolling() {
         guard pollTimer == nil else { return }
+        // ponytail: fixed 80 ms pull while open; a core push channel if idle chats ever need to wake the UI.
         var tick = 0
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
             guard let self else { return }

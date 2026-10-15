@@ -293,8 +293,7 @@ final class IslandController {
                 model.undo()
             } else if model.chat != nil {
                 // In a conversation Esc steps back, but never throws away a draft.
-                guard model.draft.isEmpty else { return false }
-                model.closeChat()
+                if model.draft.isEmpty { model.closeChat() } else { endSummon(collapse: false) }
             } else {
                 endSummon(collapse: true)
             }
@@ -337,7 +336,8 @@ final class IslandController {
             }
         } else {
             openTimer?.cancel()
-            if expanded && !pinned && !autoOpened {
+            // An open conversation stays until Back or a click outside; hover-out must not drop it mid-turn.
+            if expanded && !pinned && !autoOpened && model.chat == nil {
                 let w = DispatchWorkItem { [weak self] in self?.setExpanded(false, pinned: false) }
                 closeTimer = w
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: w)

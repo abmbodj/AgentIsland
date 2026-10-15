@@ -243,7 +243,7 @@ struct PanelView: View {
         .padding(.horizontal, 8)
         .padding(.top, 4)
         .padding(.bottom, 10)
-        .frame(width: model.chat != nil ? PanelModel.chatWidth : PanelModel.listWidth, alignment: .top)
+        .frame(width: model.width, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
         .background(GeometryReader { g in Color.clear.preference(key: HeightKey.self, value: g.size.height) })
         .onPreferenceChange(HeightKey.self) { h in
