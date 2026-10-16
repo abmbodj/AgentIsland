@@ -60,16 +60,26 @@ extension PanelModel {
     }
 }
 
+struct WritingPlanRow: View {
+    var body: some View {
+        HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Writing plan…") }.font(.system(size: 12))
+    }
+}
+
 struct InlinePlan: View {
     @ObservedObject var model: PanelModel
     let plan: ChatPlan
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack { Label("Plan · v\(plan.version)", systemImage: "doc.text").fontWeight(.semibold); Spacer(); Label(plan.status == "ready" ? "Ready for review" : plan.status.capitalized, systemImage: plan.status == "ready" ? "exclamationmark.circle" : "doc.text").foregroundStyle(plan.status == "ready" ? Color(nsColor: Theme.amber) : Color(nsColor: Theme.secondary)) }
+            HStack { Label("Plan · v\(plan.version)", systemImage: "doc.text").fontWeight(.semibold); Spacer(); if plan.status != "writing" { Label(plan.status == "ready" ? "Ready for review" : plan.status.capitalized, systemImage: plan.status == "ready" ? "exclamationmark.circle" : "doc.text").foregroundStyle(plan.status == "ready" ? Color(nsColor: Theme.amber) : Color(nsColor: Theme.secondary)) } }
                 .font(.system(size: 12))
-            ScrollView { MarkdownDocument(markdown: plan.markdown).padding(.trailing, 4) }.frame(maxHeight: 220)
-            Button("Expand plan") { model.planVersion = plan.version; model.planReader = PlanReaderSource(); model.editingPlan = false }
-                .buttonStyle(.borderless)
+            if plan.status == "writing" {
+                WritingPlanRow()
+            } else {
+                ScrollView { MarkdownDocument(markdown: plan.markdown).padding(.trailing, 4) }.frame(maxHeight: 220)
+                Button("Expand plan") { model.planVersion = plan.version; model.planReader = PlanReaderSource(); model.editingPlan = false }
+                    .buttonStyle(.borderless)
+            }
             PlanActions(model: model, plan: plan, historical: model.plans.last(where: { $0.status != "unavailable" })?.version != plan.version)
         }.padding(10).background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
     }
@@ -90,10 +100,13 @@ struct PlanReader: View {
                     Picker("Version", selection: Binding(get: { model.selectedPlan?.version ?? 1 }, set: { model.planVersion = $0; model.editingPlan = false })) {
                         ForEach(model.readerPlans) { p in Text("v\(p.version) · \(p.status)").tag(p.version) }
                     }.labelsHidden().fixedSize()
-                    Button("Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(plan.markdown, forType: .string) }.buttonStyle(.borderless)
+                    if plan.status != "writing" { Button("Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(plan.markdown, forType: .string) }.buttonStyle(.borderless) }
                 }
             }.font(.system(size: 12))
-            if let plan = model.selectedPlan, !plan.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let plan = model.selectedPlan, plan.status == "writing" {
+                WritingPlanRow()
+                Spacer()
+            } else if let plan = model.selectedPlan, !plan.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 ScrollView { MarkdownDocument(markdown: plan.markdown).padding(.vertical, 4) }
                 if model.readerSession == nil {
                     PlanActions(model: model, plan: plan, historical: model.readerPlans.last(where: { $0.status != "unavailable" })?.version != plan.version)
@@ -141,7 +154,7 @@ struct PlanActions: View {
                         Button(model.sendingPlan ? "Sending…" : "Implement plan") { model.decidePlan(plan, action: "implement") }.buttonStyle(.borderedProminent).tint(Color(nsColor: Theme.ink)).foregroundStyle(Color.black)
                     }.disabled(disabled)
                 }
-            } else { Text(plan.status == "writing" ? "Writing plan…" : plan.status.capitalized).font(.system(size: 12)) }
+            } else if plan.status != "writing" { Text(plan.status.capitalized).font(.system(size: 12)) }
         }.buttonStyle(.borderless).font(.system(size: 12)).foregroundStyle(Color(nsColor: Theme.ink))
     }
 }
