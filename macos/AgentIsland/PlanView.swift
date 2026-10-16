@@ -60,15 +60,21 @@ extension PanelModel {
     }
 }
 
+struct WritingPlanRow: View {
+    var body: some View {
+        HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Writing plan…") }.font(.system(size: 12))
+    }
+}
+
 struct InlinePlan: View {
     @ObservedObject var model: PanelModel
     let plan: ChatPlan
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack { Label("Plan · v\(plan.version)", systemImage: "doc.text").fontWeight(.semibold); Spacer(); Label(plan.status == "ready" ? "Ready for review" : plan.status.capitalized, systemImage: plan.status == "ready" ? "exclamationmark.circle" : "doc.text").foregroundStyle(plan.status == "ready" ? Color(nsColor: Theme.amber) : Color(nsColor: Theme.secondary)) }
+            HStack { Label("Plan · v\(plan.version)", systemImage: "doc.text").fontWeight(.semibold); Spacer(); if plan.status != "writing" { Label(plan.status == "ready" ? "Ready for review" : plan.status.capitalized, systemImage: plan.status == "ready" ? "exclamationmark.circle" : "doc.text").foregroundStyle(plan.status == "ready" ? Color(nsColor: Theme.amber) : Color(nsColor: Theme.secondary)) } }
                 .font(.system(size: 12))
             if plan.status == "writing" {
-                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Writing plan…") }.font(.system(size: 12))
+                WritingPlanRow()
             } else {
                 ScrollView { MarkdownDocument(markdown: plan.markdown).padding(.trailing, 4) }.frame(maxHeight: 220)
                 Button("Expand plan") { model.planVersion = plan.version; model.planReader = PlanReaderSource(); model.editingPlan = false }
@@ -98,7 +104,7 @@ struct PlanReader: View {
                 }
             }.font(.system(size: 12))
             if let plan = model.selectedPlan, plan.status == "writing" {
-                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Writing plan…") }.font(.system(size: 13))
+                WritingPlanRow()
                 Spacer()
             } else if let plan = model.selectedPlan, !plan.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 ScrollView { MarkdownDocument(markdown: plan.markdown).padding(.vertical, 4) }
