@@ -440,7 +440,7 @@ extension PanelModel {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [self] in
             guard !done else { return }
             accessPrompt = dir
-            composeError = "Waiting for you to allow access to \((dir as NSString).lastPathComponent) in the macOS prompt."
+            composeError = "Waiting for you to allow access to \((dir as NSString).lastPathComponent) in the macOS prompt. Full Disk Access in System Settings stops these for good."
         }
     }
 
