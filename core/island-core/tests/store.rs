@@ -29,6 +29,15 @@ fn cursors_agent_running_claude_hooks_is_not_a_session() {
     assert!(s.snapshot().sessions.is_empty());
 }
 
+#[test]
+fn ephemeral_codex_runs_are_not_sessions() {
+    let mut s = Store::default();
+    s.handle(&common::codex("SessionStart", json!({"transcript_path": null})), T0);
+    assert!(s.snapshot().sessions.is_empty());
+    s.handle(&common::codex("SessionStart", json!({})), T0);
+    assert_eq!(s.snapshot().sessions.len(), 1);
+}
+
 fn store_with_session() -> Store {
     let mut s = Store::default();
     s.handle(&claude("SessionStart", json!({})), T0);
