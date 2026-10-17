@@ -42,7 +42,7 @@ Being light is a core principle, weighed against every feature. A status light t
 - **Memory under 60 MB resident.** Measured 31 to 51 MB.
 - **Startup spawns nothing.** Launch binds the socket, refreshes the bundled hook binary and starts idle threads. No child processes, no folder scans, and no network beyond Sparkle's own scheduled update check when it's due. Anything a screen needs is loaded when that screen opens. Exception: first-run Setup, which inspects the agents' config and editor extensions (and briefly runs `codex app-server`) to show its diff.
 - **The hook stays tiny.** One short-lived process per agent event, std plus `libc` and `serde_json`, failing open at once when the island isn't running. It must never slow the agent down.
-- **Polling only while it's visible.** The open panel pulls from the core and stops when it collapses, except to finish a handoff or a model-list fetch already under way. New pulls ask only for what changed. Known exception: the chat list and a conversation's plan documents are still re-sent whole on every pull.
+- **Polling only while it's visible.** The open panel pulls from the core and stops when it collapses, except to finish a handoff or a model-list fetch already under way. New pulls ask only for what changed. Known exception: the chat list, and a conversation's plan documents and any pending approval or question, are still re-sent whole on every pull.
 - **Few dependencies.** Swift: Sparkle only. Rust core: `libc`, `serde`, `serde_json`, `sha2`, `similar`. Bundle under 15 MB (measured 9.9 MB).
 - **A small surface.** Prefer a good default to a setting, and a row or card to a new screen.
 
