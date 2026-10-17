@@ -625,6 +625,9 @@ extension PanelModel {
 
     func refreshChats() {
         if let list = try? CoreBridge.shared.call(["op": "chatList"], as: [ChatInfo].self) {
+            for c in list {
+                if let session = c.sessionId { SessionTitles.shared.link(temporary: "chat:\(c.id)", session: "\(c.agent):\(session)") }
+            }
             if list != chats { chats = list }
             if let c = chat, let updated = list.first(where: { $0.id == c.id }) {
                 if chat?.handoff != updated.handoff { chat?.handoff = updated.handoff }
@@ -649,6 +652,7 @@ extension PanelModel {
             rev = t.rev
             if chatStatus != t.status { chatStatus = t.status }
             if chatError != t.error { chatError = t.error }
+            if let session = t.sessionId { SessionTitles.shared.link(temporary: "chat:\(c.id)", session: "\(c.agent):\(session)") }
             if chat?.sessionId != t.sessionId { chat?.sessionId = t.sessionId }
             if chat?.handoff != t.handoff { chat?.handoff = t.handoff }
             if chat?.handoffError != t.handoffError { chat?.handoffError = t.handoffError }
