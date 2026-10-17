@@ -17,6 +17,34 @@ final class IslandPanel: NSPanel {
         becomesKeyOnlyIfNeeded = true
     }
 
+    /// The panel is never key, so every click on it is a first click, and the views SwiftUI builds a ScrollView
+    /// (the session list) from refuse one: a click on a row was dropped. Before AppKit asks, each class under
+    /// the pointer learns to take the first click inside the island.
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown { takeFirstMouse(at: event.locationInWindow) }
+        super.sendEvent(event)
+    }
+
+    private static var patched = Set<ObjectIdentifier>()
+
+    private func takeFirstMouse(at point: NSPoint) {
+        var v = contentView?.superview?.hitTest(point)
+        while let view = v {
+            let cls: AnyClass = type(of: view)
+            if Self.patched.insert(ObjectIdentifier(cls)).inserted { Self.patch(cls) }
+            v = view.superview
+        }
+    }
+
+    private static func patch(_ cls: AnyClass) {
+        let sel = #selector(NSView.acceptsFirstMouse(for:))
+        guard let m = class_getInstanceMethod(cls, sel) else { return }
+        typealias Imp = @convention(c) (NSView, Selector, NSEvent?) -> Bool
+        let previous = unsafeBitCast(method_getImplementation(m), to: Imp.self)
+        let island: @convention(block) (NSView, NSEvent?) -> Bool = { v, e in v.window is IslandPanel || previous(v, sel, e) }
+        class_replaceMethod(cls, sel, imp_implementationWithBlock(island), method_getTypeEncoding(m))
+    }
+
     /// Only while summoned (⌥⌘I): then the panel takes keys without activating the app.
     var allowsKey = false
     override var canBecomeKey: Bool { allowsKey }
