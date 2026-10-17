@@ -529,6 +529,18 @@ extension PanelModel {
         }
     }
 
+    /// Sign the CLI back in through the browser; core then resends the turn that failed.
+    func signIn() {
+        guard let c = chat, chatStatus != "running" else { return }
+        do {
+            _ = try CoreBridge.shared.call(["op": "chatLogin", "id": c.id])
+            chatStatus = "running"
+            pollChat()
+        } catch {
+            composeError = error.localizedDescription
+        }
+    }
+
     /// Remove a chat made here (stopping it if it is running).
     func deleteChat(_ c: ChatInfo) {
         _ = try? CoreBridge.shared.call(["op": "chatDelete", "id": c.id])

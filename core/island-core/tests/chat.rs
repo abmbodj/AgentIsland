@@ -739,5 +739,37 @@ exit 1"##;
     let t = wait_for(&chats,id,"idle");
     assert_eq!(t["plans"].as_array().unwrap().len(), 0);
     assert_eq!(kinds(&t), ["user", "error"]);
-    assert!(t["entries"][1]["text"].as_str().unwrap().contains("/login"));
+    assert_eq!(t["entries"][1]["status"], "signedOut");
+}
+
+#[test]
+fn sign_in_replays_the_turn_that_failed_signed_out() {
+    let script = r##"echo "$@" >> "$0.args"
+if [ "$1" = auth ]; then touch "$0.signed"; exit 0; fi
+read first
+if [ ! -f "$0.signed" ]; then
+printf '%s\n' '{"type":"assistant","message":{"id":"a","content":[{"type":"text","text":"Failed to authenticate: OAuth session expired and could not be refreshed"}]}}'
+printf '%s\n' '{"type":"result","subtype":"success","is_error":true,"result":"Failed to authenticate: OAuth session expired and could not be refreshed"}'
+exit 1
+fi
+printf '%s\n' '{"type":"assistant","message":{"id":"b","content":[{"type":"text","text":"# Plan"}]}}'
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"s"}'"##;
+    let (tools, root) = fixture("sign-in", &[("claude", script)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools,"claude",root.to_str().unwrap(),"plan it",vec![],s(None,None,Some("plan"),false)).unwrap();
+    let t = wait_for(&chats,id,"idle");
+    assert_eq!(t["entries"].as_array().unwrap().last().unwrap()["status"], "signedOut");
+    chats.login(&tools,id).unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    let t = loop {
+        let t = chats.transcript(id,0).unwrap();
+        if t["plans"][0]["status"] == "ready" { break t }
+        assert!(Instant::now() < end, "never replayed: {t}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(t["plans"][0]["markdown"], "# Plan");
+    let args = std::fs::read_to_string(root.join("bin/claude.args")).unwrap();
+    let lines: Vec<_> = args.lines().collect();
+    assert_eq!(lines[1], "auth login");
+    assert!(lines[2].contains("--permission-mode plan"), "{args}");
 }

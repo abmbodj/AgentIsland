@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 const OUTPUT_LIMIT: usize = 4_000;
 const STDERR_LIMIT: usize = 600;
-const SIGNED_OUT: &str = "Claude Code is signed out. Open Terminal, run `claude`, sign in with /login, then send your message again.";
+const SIGNED_OUT: &str = "Claude Code is signed out. Sign in to pick up where you left off.";
 const CLAUDE_MODES: &[&str] = &["plan", "acceptEdits", "auto", "bypassPermissions"];
 const CODEX_MODES: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
 
@@ -212,6 +212,15 @@ impl Transcript {
         self.push(Entry::new("error", text));
     }
 
+    /// An error row the UI offers a Sign in button on.
+    fn signed_out(&mut self, text: &str) {
+        let mut e = Entry::new("error", text);
+        e.status = "signedOut";
+        self.push(e);
+    }
+
+    fn is_signed_out(&self) -> bool { self.entries.last().is_some_and(|e| e.status == "signedOut") }
+
     pub fn notice(&mut self, text: &str) {
         self.push(Entry::new("notice", text));
     }
@@ -298,14 +307,17 @@ impl Transcript {
                 }
                 if v["is_error"] == true {
                     let raw = v["result"].as_str().or(v["subtype"].as_str()).unwrap_or("The agent stopped with an error.");
-                    let why = if raw.contains("authenticate") || raw.contains("/login") { SIGNED_OUT } else { raw };
+                    let signed_out = raw.contains("authenticate") || raw.contains("/login");
+                    let why = if signed_out { SIGNED_OUT } else { raw };
                     // The CLI also echoes the failure as an assistant message; turn that into the one error row.
                     match self.entries.iter().rposition(|e| e.kind == "assistant") {
                         Some(i) if self.entries[i].text.trim() == raw.trim() => {
                             let e = self.touch(i);
                             e.kind = "error";
                             e.text = why.into();
+                            if signed_out { e.status = "signedOut" }
                         }
+                        _ if signed_out => self.signed_out(why),
                         _ => self.error(why),
                     }
                 }
@@ -400,6 +412,15 @@ struct State {
     /// Native approvals during a reviewed plan's implementation, without widening its mode.
     approval: Option<Permission>,
     executing_plan: bool,
+    /// The last turn as asked, replayed after signing in.
+    retry: Option<Retry>,
+}
+
+struct Retry {
+    text: String,
+    images: Vec<Image>,
+    settings: Settings,
+    decision: Option<(u64, String, String)>,
 }
 
 struct Permission {
@@ -531,7 +552,7 @@ impl Chats {
             agent: agent.into(),
             cwd: cwd.into(),
             title,
-            state: Mutex::new(State { transcript: Transcript::default(), plans: PlanBook::default(), planning_start: None, native_plan: None, previous_mode: None, status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None, handoff_token: 0, last: None, stdin: None, question: None, approval: None, executing_plan: false }),
+            state: Mutex::new(State { transcript: Transcript::default(), plans: PlanBook::default(), planning_start: None, native_plan: None, previous_mode: None, status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None, handoff_token: 0, last: None, stdin: None, question: None, approval: None, executing_plan: false, retry: None }),
         });
         self.list.lock().unwrap_or_else(|e| e.into_inner()).insert(id, chat.clone());
         Self::turn(tools, &chat, text, images, settings)?;
@@ -736,11 +757,45 @@ impl Chats {
         Self::turn_inner(tools, &chat, "", vec![], Settings::default(), Some((version, action, feedback.unwrap_or_default())))
     }
 
+    /// Run `claude auth login` (it opens the browser), then replay the turn that failed signed out.
+    pub fn login(&self, tools: &Tools, id: u64) -> Result<(), String> {
+        let chat = self.get(id)?;
+        if chat.agent != "claude" { return Err("Sign in to Codex from Terminal with `codex login`.".into()); }
+        let bin = tools.find("claude").ok_or("Could not find claude on this Mac.")?;
+        let mut g = chat.lock();
+        if g.status == Status::Running { return Err("The agent is still working.".into()); }
+        // ponytail: output is dropped; the browser opening is the whole flow. Surface the printed URL if it ever fails to open.
+        let child = Command::new(&bin).args(["auth", "login"]).current_dir(&chat.cwd).env("PATH", crate::pr::search_path(&bin))
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0).spawn().map_err(|e| e.to_string())?;
+        g.transcript.notice("Finish signing in in your browser.");
+        g.status = Status::Running;
+        g.stopping = false;
+        g.error = None;
+        g.pid = Some(child.id() as i32);
+        drop(g);
+        let (tools, chat) = (tools.clone(), chat.clone());
+        std::thread::spawn(move || {
+            let mut child = child;
+            let ok = child.wait().is_ok_and(|s| s.success());
+            let mut g = chat.lock();
+            g.pid = None;
+            g.status = Status::Idle;
+            if g.stopping { g.transcript.notice("Stopped"); return }
+            if !ok { g.transcript.signed_out("Sign-in didn't finish. Try again."); return }
+            let Some(r) = g.retry.take() else { g.transcript.notice("Signed in."); return };
+            drop(g);
+            let decision = r.decision.as_ref().map(|(v, a, f)| (*v, a.as_str(), f.as_str()));
+            if let Err(e) = Self::turn_inner(&tools, &chat, &r.text, r.images, r.settings, decision) { chat.lock().transcript.error(&e) }
+        });
+        Ok(())
+    }
+
     fn turn(tools: &Tools, chat: &Arc<Chat>, text: &str, images: Vec<Image>, settings: Settings) -> Result<(), String> {
         Self::turn_inner(tools, chat, text, images, settings, None)
     }
 
     fn turn_inner(tools: &Tools, chat: &Arc<Chat>, text: &str, images: Vec<Image>, mut settings: Settings, decision: Option<(u64, &str, &str)>) -> Result<(), String> {
+        let retry = Retry { text: text.into(), images: images.clone(), settings: settings.clone(), decision: decision.map(|(v, a, f)| (v, a.into(), f.into())) };
         let mut text = text.to_string();
         let session = {
             let mut g = chat.lock();
@@ -783,6 +838,7 @@ impl Chats {
             }
             g.last = Some(settings.clone());
             g.executing_plan = decision.is_some_and(|(_, action, _)| action == "implement");
+            g.retry = Some(retry);
             g.error = None;
             g.stopping = false;
             g.status = Status::Running;
@@ -867,6 +923,10 @@ impl Chats {
                 let success = plan_success && finished && code == Some(0) && !g.stopping && g.plans.has_draft();
                 let anchor = success.then(|| g.transcript.push(Entry::new("plan", "")));
                 g.plans.finish(anchor);
+            }
+            // Signing in replays the decision, so the plan it acted on must be decidable again.
+            if g.transcript.is_signed_out() {
+                if let Some(v) = g.retry.as_ref().and_then(|r| r.decision.as_ref()).filter(|d| d.1 == "implement").map(|d| d.0) { g.plans.launch_failed(v, SIGNED_OUT) }
             }
             if g.stopping {
                 g.transcript.notice("Stopped");

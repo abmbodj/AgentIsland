@@ -558,7 +558,7 @@ struct ChatView: View {
                         if e.kind == "plan", let plan = model.plans.first(where: { $0.entryIndex == e.index }) {
                             InlinePlan(model: model, plan: plan)
                         } else {
-                            EntryView(entry: e, needsApproval: needsApproval).transition(.rise)
+                            EntryView(entry: e, needsApproval: needsApproval, signIn: e.status == "signedOut" && e.index == model.entries.last?.index && model.chatStatus != "running" ? model.signIn : nil).transition(.rise)
                         }
                     }
                     if let approval = model.chatApproval {
@@ -785,6 +785,7 @@ private struct Banner<Action: View>: View {
 private struct EntryView: View {
     let entry: ChatEntry
     let needsApproval: Bool
+    var signIn: (() -> Void)?
 
     var body: some View {
         switch entry.kind {
@@ -825,6 +826,11 @@ private struct EntryView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Error: \(entry.text)")
+            if let signIn {
+                Button("Sign in", action: signIn)
+                    .buttonStyle(.borderedProminent).tint(Color(nsColor: Theme.ink)).foregroundStyle(Color.black).controlSize(.small)
+                    .accessibilityHint("Opens your browser to sign in to Claude, then resends your message")
+            }
         default:
             Text(entry.text).font(.system(size: 11)).foregroundStyle(muted).frame(maxWidth: .infinity)
         }
