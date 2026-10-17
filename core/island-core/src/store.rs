@@ -321,7 +321,8 @@ impl Store {
         }
         let Some(id) = p["session_id"].as_str() else { return None };
         // Cursor's agent runs the Claude hooks in ~/.claude too; it isn't a session we track.
-        if p.get("cursor_version").is_some() {
+        // Nor is a one-shot `codex exec --ephemeral` (its hooks report a null transcript).
+        if p.get("cursor_version").is_some() || (msg.agent == "codex" && p.get("transcript_path").is_some_and(Value::is_null)) {
             return None;
         }
         let idx = match self.sessions.iter().position(|s| s.id == id && s.agent == msg.agent) {

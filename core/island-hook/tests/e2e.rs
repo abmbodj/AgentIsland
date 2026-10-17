@@ -99,6 +99,24 @@ fn cursors_agent_never_becomes_a_session() {
 }
 
 #[test]
+fn ephemeral_codex_runs_never_become_sessions() {
+    let h = start("ephemeral");
+    let f = fixture("SessionStart");
+    let mut payload = f["payload"].clone();
+    payload["session_id"] = "eph".into();
+    payload["transcript_path"] = Value::Null;
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_island-hook"));
+    cmd.arg("codex").env_clear().env("ISLAND_SOCKET", &h.sock).stdin(Stdio::piped()).stdout(Stdio::piped());
+    let mut child = cmd.spawn().unwrap();
+    child.stdin.take().unwrap().write_all(payload.to_string().as_bytes()).unwrap();
+    child.wait().unwrap();
+    h.hook("SessionStart", serde_json::json!({}));
+    let ids: Vec<Value> = h.last()["sessions"].as_array().unwrap().iter().map(|s| s["id"].clone()).collect();
+    assert_eq!(ids.len(), 1);
+    assert_ne!(ids[0], "eph");
+}
+
+#[test]
 fn hook_captures_terminal_identity_from_its_environment() {
     let h = start("identity");
     h.hook("UserPromptSubmit", serde_json::json!({}));

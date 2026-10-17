@@ -117,7 +117,9 @@ fn main() {
         agent @ ("claude" | "codex") => {
             let parsed = serde_json::from_str::<Value>(&payload).ok();
             // Cursor's agent runs the Claude hooks in ~/.claude too, in its own payload shape.
-            if parsed.as_ref().is_some_and(|v| v.get("cursor_version").is_some()) {
+            // `codex exec --ephemeral` (T3 Code's title and commit-message helper) has no transcript at all.
+            let ephemeral = |v: &Value| agent == "codex" && v.get("transcript_path").is_some_and(Value::is_null);
+            if parsed.as_ref().is_some_and(|v| v.get("cursor_version").is_some() || ephemeral(v)) {
                 return;
             }
             let event = parsed.and_then(|v| v["hook_event_name"].as_str().map(str::to_string));
