@@ -760,6 +760,7 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id
     let t = wait_for(&chats,id,"idle");
     assert_eq!(t["entries"].as_array().unwrap().last().unwrap()["status"], "signedOut");
     chats.login(&tools,id).unwrap();
+    assert!(chats.login(&tools,id).is_err(), "one sign-in at a time");
     let end = Instant::now() + Duration::from_secs(10);
     let t = loop {
         let t = chats.transcript(id,0).unwrap();
@@ -772,4 +773,5 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id
     let lines: Vec<_> = args.lines().collect();
     assert_eq!(lines[1], "auth login");
     assert!(lines[2].contains("--permission-mode plan"), "{args}");
+    assert!(chats.login(&tools,id).is_err(), "signed in chats have nothing to replay");
 }

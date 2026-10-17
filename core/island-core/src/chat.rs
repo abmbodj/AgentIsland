@@ -307,7 +307,7 @@ impl Transcript {
                 }
                 if v["is_error"] == true {
                     let raw = v["result"].as_str().or(v["subtype"].as_str()).unwrap_or("The agent stopped with an error.");
-                    let signed_out = raw.contains("authenticate") || raw.contains("/login");
+                    let signed_out = raw.contains("Failed to authenticate") || raw.contains("/login") || raw.contains("OAuth");
                     let why = if signed_out { SIGNED_OUT } else { raw };
                     // The CLI also echoes the failure as an assistant message; turn that into the one error row.
                     match self.entries.iter().rposition(|e| e.kind == "assistant") {
@@ -764,6 +764,8 @@ impl Chats {
         let bin = tools.find("claude").ok_or("Could not find claude on this Mac.")?;
         let mut g = chat.lock();
         if g.status == Status::Running { return Err("The agent is still working.".into()); }
+        if g.handoff.is_some() { return Err("Continue this chat in its handoff destination, or cancel the queued handoff.".into()); }
+        if !g.transcript.is_signed_out() { return Err("This chat is already signed in.".into()); }
         // ponytail: output is dropped; the browser opening is the whole flow. Surface the printed URL if it ever fails to open.
         let child = Command::new(&bin).args(["auth", "login"]).current_dir(&chat.cwd).env("PATH", crate::pr::search_path(&bin))
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0).spawn().map_err(|e| e.to_string())?;
@@ -780,8 +782,7 @@ impl Chats {
             let mut g = chat.lock();
             g.pid = None;
             g.status = Status::Idle;
-            if g.stopping { g.transcript.notice("Stopped"); return }
-            if !ok { g.transcript.signed_out("Sign-in didn't finish. Try again."); return }
+            if g.stopping || !ok { g.transcript.signed_out("Sign-in didn't finish. Try again."); return }
             let Some(r) = g.retry.take() else { g.transcript.notice("Signed in."); return };
             drop(g);
             let decision = r.decision.as_ref().map(|(v, a, f)| (*v, a.as_str(), f.as_str()));
