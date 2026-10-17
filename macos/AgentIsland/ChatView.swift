@@ -512,6 +512,7 @@ struct ChatView: View {
 
     @ViewBuilder private var handoffFooter: some View {
         VStack(alignment: .leading, spacing: 6) {
+            EditSummary(entries: model.entries)
             if let error = model.chat?.handoffError {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.system(size: 11)).foregroundStyle(secondary)
@@ -907,6 +908,83 @@ private struct CodeBlock: View {
             }
         }
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.06)))
+    }
+}
+
+/// "Edited 2 files +23 −1": every file the chat changed, totalled; opens to a per-file list.
+private struct EditSummary: View {
+    let entries: [ChatEntry]
+    @State private var open = false
+
+    // ponytail: Claude's Edit/MultiEdit/Write only; Codex reports file changes without line counts.
+    private var files: [(path: String, added: Int, removed: Int)] {
+        var out: [(path: String, added: Int, removed: Int)] = []
+        for e in entries where e.kind == "tool" && e.status == "done" && e.added + e.removed > 0 {
+            if let i = out.firstIndex(where: { $0.path == e.input }) {
+                out[i].added += e.added
+                out[i].removed += e.removed
+            } else {
+                out.append((e.input, e.added, e.removed))
+            }
+        }
+        return out
+    }
+
+    var body: some View {
+        let files = files
+        if !files.isEmpty {
+            let added = files.reduce(0) { $0 + $1.added }, removed = files.reduce(0) { $0 + $1.removed }
+            VStack(alignment: .leading, spacing: 4) {
+                Button { withAnimation(easing) { open.toggle() } } label: {
+                    HStack(spacing: 6) {
+                        Text("Edited \(files.count) \(files.count == 1 ? "file" : "files")").foregroundStyle(secondary)
+                        counts(added, removed)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                            .foregroundStyle(muted)
+                        Spacer(minLength: 0)
+                    }
+                    .font(.system(size: 12))
+                    .padding(.horizontal, 8)
+                    .frame(height: 24)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Edited \(files.count) files, \(added) lines added, \(removed) removed")
+                .accessibilityHint(open ? "Hides the file list" : "Shows the file list")
+                if open {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(files, id: \.path) { f in
+                                HStack(spacing: 8) {
+                                    Text((f.path as NSString).lastPathComponent).foregroundStyle(ink)
+                                    Text(f.path).font(.system(size: 10, design: .monospaced)).foregroundStyle(muted)
+                                        .lineLimit(1).truncationMode(.head)
+                                    Spacer(minLength: 6)
+                                    counts(f.added, f.removed)
+                                }
+                                .font(.system(size: 11))
+                                .help(f.path)
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                    }
+                    .frame(maxHeight: 120)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity)
+                }
+            }
+        }
+    }
+
+    /// Bright adds, muted removes, as on approval cards (red/green are reserved).
+    private func counts(_ added: Int, _ removed: Int) -> some View {
+        HStack(spacing: 4) {
+            Text("+\(added)").fontWeight(.semibold).foregroundStyle(ink)
+            Text("−\(removed)").foregroundStyle(secondary)
+        }
+        .monospacedDigit()
     }
 }
 

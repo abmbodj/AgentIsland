@@ -136,6 +136,9 @@ pub struct Entry {
     pub caption: String,
     /// User rows: how many images went with the message.
     pub images: usize,
+    /// Edit/MultiEdit/Write rows: lines the change adds and removes.
+    pub added: usize,
+    pub removed: usize,
     pub rev: u64,
     #[serde(skip)]
     key: String,
@@ -143,7 +146,7 @@ pub struct Entry {
 
 impl Entry {
     fn new(kind: &'static str, text: &str) -> Self {
-        Entry { kind, text: text.into(), name: String::new(), input: String::new(), output: String::new(), status: "done", caption: String::new(), images: 0, rev: 0, key: String::new() }
+        Entry { kind, text: text.into(), name: String::new(), input: String::new(), output: String::new(), status: "done", caption: String::new(), images: 0, added: 0, removed: 0, rev: 0, key: String::new() }
     }
 }
 
@@ -245,6 +248,12 @@ impl Transcript {
         let e = self.touch(i);
         e.name = name.into();
         e.input = summarize(input);
+        // Count once, from the full input, before the tool runs (Write diffs against the file on disk).
+        if e.added + e.removed == 0 && !input.is_null() {
+            if let Some(d) = crate::diff::preview(name, input) {
+                (e.added, e.removed) = (d.added, d.removed);
+            }
+        }
     }
 
     fn tool_result(&mut self, id: &str, output: &str, failed: bool) {

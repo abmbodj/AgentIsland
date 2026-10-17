@@ -147,6 +147,22 @@ fn claude_turn_streams_text_and_tool_rows_then_follow_up_resumes() {
 }
 
 #[test]
+fn edit_rows_count_their_added_and_removed_lines() {
+    let script = r#"echo '{"type":"system","subtype":"init","session_id":"s"}'
+echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m"}}}'
+echo '{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"e","name":"Edit","input":{}}}}'
+printf '%s\n' '{"type":"assistant","message":{"id":"m","content":[{"type":"tool_use","id":"e","name":"Edit","input":{"file_path":"/x/a.rs","old_string":"a\nb","new_string":"a\nc\nd"}},{"type":"tool_use","id":"b","name":"Bash","input":{"command":"ls"}}]}}'
+echo '{"type":"result","subtype":"success","is_error":false,"session_id":"s"}'"#;
+    let (tools, root) = fixture("diffcount", &[("claude", script)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "edit", vec![], Settings::default()).unwrap();
+    let t = wait_for(&chats, id, "idle");
+    let e = t["entries"].as_array().unwrap();
+    assert_eq!((e[1]["input"].as_str(), e[1]["added"].as_u64(), e[1]["removed"].as_u64()), (Some("/x/a.rs"), Some(2), Some(1)));
+    assert_eq!((e[2]["added"].as_u64(), e[2]["removed"].as_u64()), (Some(0), Some(0)));
+}
+
+#[test]
 fn transcript_pull_returns_only_entries_changed_since_the_revision() {
     let (tools, root) = fixture("rev", &[("claude", CLAUDE)]);
     let chats = Chats::default();
