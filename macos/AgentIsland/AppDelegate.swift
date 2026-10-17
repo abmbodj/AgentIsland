@@ -78,7 +78,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         _ = Updater.shared
-        _ = try? CoreBridge.shared.call(["op": "chatOptions", "refresh": true]) // warm the model menus
         #if DEBUG
         TurnSettings.selfCheck()
         #endif

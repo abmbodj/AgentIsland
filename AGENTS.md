@@ -1,5 +1,9 @@
 # Agent instructions
 
+## Before building a feature
+
+Agent Island must stay lightweight (see Lightweight in `PRODUCT.md`). Check the feature against those budgets, and put its cost and tradeoff in the plan and the PR description.
+
 ## Finishing a change
 
 1. Run the tests (`cargo test` in `core/`) and make sure the macOS app builds (`xcodebuild` on `macos/`; don't install a branch build).
