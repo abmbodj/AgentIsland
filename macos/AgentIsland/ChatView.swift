@@ -443,6 +443,7 @@ struct ChatView: View {
 
     private var statusText: String {
         if model.disconnected { return "Disconnected" }
+        if model.working { return "Working" }
         switch model.chatStatus {
         case "running": return "Working"
         case "failed": return "Failed"
@@ -583,7 +584,7 @@ struct ChatView: View {
                     }
                     if let q = model.chatQuestion {
                         QuestionCard(model: model, questions: q).transition(.rise)
-                    } else if model.chatStatus == "running" && !model.disconnected {
+                    } else if model.working && !model.disconnected {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.mini)
                             Text("Working").font(.system(size: 12)).foregroundStyle(secondary)
@@ -657,7 +658,7 @@ struct ChatView: View {
     private var empty: some View {
         VStack(spacing: 4) {
             Text("No messages yet").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
-            Text("Your first message is on its way.").font(.system(size: 11)).foregroundStyle(secondary)
+            Text(model.chat?.session == nil ? "Your first message is on its way." : "This session hasn't said anything yet.").font(.system(size: 11)).foregroundStyle(secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 60)

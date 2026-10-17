@@ -377,14 +377,23 @@ extension PanelModel {
     func tap(_ s: SessionInfo) {
         // The chat list is only polled while open, so a just-started chat may not be linked to its row yet.
         if chatFor(s) == nil { refreshChats() }
-        if let c = chatFor(s) { openChat(c) } else if let h = openHistory(s) { openChat(h) } else if s.hasPlan { openSessionPlan(s) } else { onJump(s) }
+        if let c = chatFor(s) { openChat(c); return }
+        let fallback = { [self] in if s.hasPlan { openSessionPlan(s) } else { onJump(s) } }
+        guard let path = s.transcriptPath else { return fallback() }
+        // A long transcript takes a moment to read; off the main thread so the island never stalls.
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let r = try? CoreBridge.shared.call(["op": "chatHistory", "agent": s.agent, "cwd": s.cwd, "sessionId": s.id, "path": path], as: ChatStarted.self)
+            DispatchQueue.main.async { [self] in
+                guard isOpen, chat == nil else { return } // collapsed or moved on meanwhile
+                guard let r else { return fallback() }
+                openChat(ChatInfo(id: r.id, agent: s.agent, cwd: s.cwd, title: s.project, status: "idle", sessionId: s.id, session: s))
+            }
+        }
     }
 
-    private func openHistory(_ s: SessionInfo) -> ChatInfo? {
-        guard let path = s.transcriptPath,
-              let r = try? CoreBridge.shared.call(["op": "chatHistory", "agent": s.agent, "cwd": s.cwd, "sessionId": s.id, "path": path], as: ChatStarted.self)
-        else { return nil }
-        return ChatInfo(id: r.id, agent: s.agent, cwd: s.cwd, title: s.project, status: "idle", sessionId: s.id, session: s)
+    /// The agent is working: this chat's own turn, or the history's session in its terminal or app.
+    var working: Bool {
+        chatStatus == "running" || [.working, .needsInput].contains(historySession?.state)
     }
 
     /// The open history's session as the hooks report it now (as first opened once it has left the list).
@@ -429,6 +438,8 @@ extension PanelModel {
     /// Back to the session list; not animated when the panel is collapsing.
     func closeChat(animated: Bool = true) {
         let change = { [self] in
+            // A history view is rebuilt from its file on the next open; free it unless a reply is still running.
+            if let c = chat, c.session != nil, chatStatus != "running" { _ = try? CoreBridge.shared.call(["op": "chatDelete", "id": c.id]) }
             chat = nil
             replySettings = nil
             chatQuestion = nil

@@ -694,7 +694,7 @@ impl Chats {
         g.transcript.session_id = Some(session_id.into());
         g.history = Some(History { path: path.into(), offset: 0 });
         tail(&mut g, agent);
-        if g.transcript.entries.is_empty() && !std::path::Path::new(path).is_file() { g.transcript.notice("History not available.") }
+        if g.transcript.entries.is_empty() && std::fs::File::open(path).is_err() { g.transcript.notice("History not available.") }
         Ok(chat.id)
     }
 
