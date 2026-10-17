@@ -97,6 +97,10 @@ final class IslandController {
         fixedScreen = screen
         panel.contentView = view
         view.onClick = { [weak self] in self?.clicked() }
+        view.onMotionCompletion = { [weak self] in
+            guard let self else { return }
+            self.fitWindow(to: self.view.islandRect)
+        }
         heightSink = model.$contentHeight.removeDuplicates().dropFirst().sink { [weak self] _ in
             DispatchQueue.main.async { if self?.expanded == true { self?.render(animated: true) } }
         }
@@ -479,18 +483,16 @@ final class IslandController {
 
     private var envelopeOrigin = CGPoint.zero
     private var windowRect = CGRect.zero
-    private var shrinkTimer: DispatchWorkItem?
 
-    /// Size the window to exactly the island (envelope coords); during animations, to the union of
-    /// the old and new shapes, shrinking once the spring settles.
-    private func fitWindow(to target: CGRect, animated: Bool) {
-        shrinkTimer?.cancel()
+    /// Cover all scalar extrema of the current flight, including momentum after a reversal.
+    /// Only the coordinator's current-generation completion can shrink to the final silhouette.
+    private func fitWindow(to target: CGRect) {
         guard !target.isEmpty else {
             panel.orderOut(nil)
             windowRect = .zero
             return
         }
-        let r = (animated && !windowRect.isEmpty ? windowRect.union(target) : target).integral
+        let r = target.integral
         if r != windowRect {
             windowRect = r
             panel.setFrame(r.offsetBy(dx: envelopeOrigin.x, dy: envelopeOrigin.y), display: false)
@@ -498,16 +500,11 @@ final class IslandController {
             view.needsLayout = true
         }
         panel.orderFrontRegardless()
-        if r != target.integral {
-            let w = DispatchWorkItem { [weak self] in self?.fitWindow(to: target, animated: false) }
-            shrinkTimer = w
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: w)
-        }
     }
 
     private func render(animated: Bool) {
         view.render(snapshot: snapshot, expanded: expanded, animated: animated)
-        fitWindow(to: view.islandRect, animated: animated)
+        fitWindow(to: view.motionRect)
         #if DEBUG
         debugRender()
         #endif

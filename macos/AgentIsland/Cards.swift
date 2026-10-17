@@ -1,4 +1,5 @@
 import SwiftUI
+import QuartzCore
 
 private let ink = Color(nsColor: Theme.ink)
 private let secondary = Color(nsColor: Theme.secondary)
@@ -80,18 +81,63 @@ private struct ResponseButton: View {
     }
 }
 
-struct UndoRing: View {
+/// Render-server countdown; no application timer or frame-by-frame SwiftUI invalidation.
+struct UndoRing: NSViewRepresentable {
     let started: Date
-    var body: some View {
-        TimelineView(.animation(minimumInterval: Theme.reduceMotion ? 0.5 : 1 / 30)) { ctx in
-            let left = max(0, 1 - ctx.date.timeIntervalSince(started) / PanelModel.undoWindow)
-            Circle()
-                .trim(from: 0, to: left)
-                .stroke(ink, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-                .frame(width: 11, height: 11)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    final class RingView: NSView {
+        let ring = CAShapeLayer()
+        var started: Date?
+        var reduced = false
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            wantsLayer = true
+            layer?.addSublayer(ring)
+            ring.fillColor = nil
+            ring.strokeColor = Theme.ink.cgColor
+            ring.lineWidth = 1.6
+            ring.lineCap = .round
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override func layout() {
+            super.layout()
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            ring.bounds = CGRect(origin: .zero, size: bounds.size)
+            ring.position = CGPoint(x: bounds.midX, y: bounds.midY)
+            ring.path = CountdownRingGeometry.path(in: ring.bounds, lineWidth: ring.lineWidth)
+            CATransaction.commit()
+        }
+
+        func configure(started: Date, reduceMotion: Bool) {
+            guard self.started != started || reduced != reduceMotion else { return }
+            self.started = started
+            reduced = reduceMotion
+            let timing = CountdownTiming(started: started, duration: PanelModel.undoWindow, now: Date())
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            ring.removeAnimation(forKey: "countdown")
+            // Reduced Motion shows a static ring while Undo remains available.
+            ring.strokeEnd = reduceMotion ? 1 : 0
+            if !reduceMotion, timing.remaining > 0 {
+                let animation = CABasicAnimation(keyPath: "strokeEnd")
+                animation.fromValue = timing.fraction
+                animation.toValue = 0
+                animation.duration = timing.remaining
+                animation.timingFunction = CAMediaTimingFunction(name: .linear)
+                ring.add(animation, forKey: "countdown")
+            }
+            CATransaction.commit()
         }
     }
+
+    func makeNSView(context: Context) -> RingView { RingView(frame: .zero) }
+    func updateNSView(_ view: RingView, context: Context) { view.configure(started: started, reduceMotion: reduceMotion) }
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: RingView, context: Context) -> CGSize? { CGSize(width: 11, height: 11) }
+    static func dismantleNSView(_ view: RingView, coordinator: ()) { view.ring.removeAllAnimations() }
 }
 
 private struct CardView: View {
@@ -100,6 +146,7 @@ private struct CardView: View {
     let item: Attention
     let index: Int
     let count: Int
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showDiff = false
     @State private var showFull = false
 
@@ -119,6 +166,7 @@ private struct CardView: View {
         }
         .padding(.horizontal, 10)
         .padding(.top, 8)
+        .staticDetailWhenReduced()
     }
 
     private var header: some View {
@@ -169,7 +217,7 @@ private struct CardView: View {
                     .onTapGesture { showFull.toggle() }
             }
             if let d = item.diff {
-                Button { withAnimation(.easeOut(duration: Theme.reduceMotion ? 0 : 0.18)) { showDiff.toggle() } } label: {
+                Button { withAnimation(Motion.detail(reduceMotion: reduceMotion)) { showDiff.toggle() } } label: {
                     HStack(spacing: 6) {
                         Text("+\(d.added)").fontWeight(.semibold)
                         Text("−\(d.removed)").foregroundStyle(secondary)

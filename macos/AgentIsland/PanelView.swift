@@ -265,6 +265,7 @@ private struct HeightKey: PreferenceKey {
 }
 
 struct PanelView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: PanelModel
     /// Measured so the rows get whatever height the card and usage strip leave, and scroll past that.
     @State private var cardHeight: CGFloat = 0
@@ -294,21 +295,30 @@ struct PanelView: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stripHeight = $0 }
             }
         }
+        .staticDetailWhenReduced()
     }
 
     var body: some View {
         ZStack(alignment: .top) {
             switch model.screen {
-            case .chat: ChatView(model: model).transition(.screen(forward: model.navForward))
-            case .compose: NewChatView(model: model).transition(.screen(forward: model.navForward))
-            case .list: list.transition(.screen(forward: model.navForward))
+            case .chat: ChatView(model: model).transition(.screen(forward: model.navForward, reduceMotion: reduceMotion))
+            case .compose: NewChatView(model: model).transition(.screen(forward: model.navForward, reduceMotion: reduceMotion))
+            case .list: list.transition(.screen(forward: model.navForward, reduceMotion: reduceMotion))
             }
         }
+        .offset(x: model.planReader != nil && !reduceMotion ? -28 : 0)
         .opacity(model.planReader == nil ? 1 : 0)
         .allowsHitTesting(model.planReader == nil)
         .accessibilityHidden(model.planReader != nil)
-        .overlay { if model.planReader != nil { PlanReader(model: model) } }
-        .animation(Motion.screen, value: model.screen)
+        .overlay {
+            if model.planReader != nil {
+                PlanReader(model: model)
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(x: 28)))
+            }
+        }
+        .animation(Motion.navigation(reduceMotion: reduceMotion), value: model.screen)
+        .animation(Motion.navigation(reduceMotion: reduceMotion), value: model.planReader != nil)
+        .animation(nil, value: reduceMotion)
         .frame(height: model.planReader != nil ? PanelModel.chatHeight : nil)
         .clipped()
         .padding(.horizontal, 8)
@@ -352,6 +362,7 @@ struct PanelView: View {
 }
 
 private struct SessionRow: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let session: SessionInfo
     let now: Date
     @ObservedObject var model: PanelModel
@@ -393,7 +404,7 @@ private struct SessionRow: View {
                     PRButton(model: model, session: session)
                     if !session.subagents.isEmpty {
                         Button {
-                            withAnimation(.easeOut(duration: Theme.reduceMotion ? 0 : 0.18)) {
+                            withAnimation(Motion.detail(reduceMotion: reduceMotion)) {
                                 if open { model.openGroups.remove(session.id) } else { model.openGroups.insert(session.id) }
                             }
                         } label: {

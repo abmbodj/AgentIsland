@@ -5,7 +5,7 @@ import SwiftUI
 /// Session glyph: shape = agent (Claude circle, Codex rounded square), color + motion = state.
 /// Core Animation only, so breathing runs in the render server rather than our process.
 enum Glyph {
-    static func style(_ l: CALayer, agent: String, state: SessionState, size: CGFloat) {
+    static func style(_ l: CALayer, agent: String, state: SessionState, size: CGFloat, reduceMotion: Bool = Theme.reduceMotion) {
         l.sublayers?.forEach { $0.removeFromSuperlayer() }
         l.removeAnimation(forKey: "breathe")
         l.borderWidth = 0
@@ -15,7 +15,7 @@ enum Glyph {
 
         switch state {
         case .working:
-            if Theme.reduceMotion {
+            if reduceMotion {
                 l.borderWidth = 1.2
                 l.borderColor = Theme.ink.cgColor
             } else {
@@ -64,6 +64,7 @@ struct GlyphView: NSViewRepresentable {
     var agent: String
     var state: SessionState
     var size: CGFloat = 8
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     final class V: NSView {
         var key = ""
@@ -77,12 +78,12 @@ struct GlyphView: NSViewRepresentable {
     }
 
     func updateNSView(_ v: V, context: Context) {
-        let key = "\(agent)/\(state.rawValue)/\(Theme.reduceMotion)"
+        let key = "\(agent)/\(state.rawValue)/\(reduceMotion)/\(size)"
         guard key != v.key, let l = v.layer else { return }
         v.key = key
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        Glyph.style(l, agent: agent, state: state, size: size)
+        Glyph.style(l, agent: agent, state: state, size: size, reduceMotion: reduceMotion)
         CATransaction.commit()
     }
 
@@ -139,16 +140,18 @@ struct IslandButtonStyle: ButtonStyle {
         let configuration: Configuration
         let radius: CGFloat
         @Environment(\.isFocused) private var focused
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
         var body: some View {
             configuration.label
-                .scaleEffect(configuration.isPressed && !Theme.reduceMotion ? 0.97 : 1)
+                .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
                 .opacity(configuration.isPressed ? 0.8 : 1)
                 .overlay(
                     RoundedRectangle(cornerRadius: radius)
                         .strokeBorder(Color(nsColor: Theme.ink).opacity(focused ? 0.5 : 0), lineWidth: 1.5)
                 )
-                .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+                .animation(Motion.feedback(reduceMotion: reduceMotion), value: configuration.isPressed)
+                .animation(nil, value: reduceMotion)
         }
     }
 }
