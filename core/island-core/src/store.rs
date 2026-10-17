@@ -320,6 +320,10 @@ impl Store {
             return None;
         }
         let Some(id) = p["session_id"].as_str() else { return None };
+        // Cursor's agent runs the Claude hooks in ~/.claude too; it isn't a session we track.
+        if p.get("cursor_version").is_some() {
+            return None;
+        }
         let idx = match self.sessions.iter().position(|s| s.id == id && s.agent == msg.agent) {
             Some(i) => i,
             None => {

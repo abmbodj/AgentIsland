@@ -115,7 +115,12 @@ fn main() {
         // The island's own headless runs (writing a PR) are not sessions.
         "claude" | "codex" if std::env::var_os("AGENT_ISLAND_INTERNAL").is_some() => {}
         agent @ ("claude" | "codex") => {
-            let event = serde_json::from_str::<Value>(&payload).ok().and_then(|v| v["hook_event_name"].as_str().map(str::to_string));
+            let parsed = serde_json::from_str::<Value>(&payload).ok();
+            // Cursor's agent runs the Claude hooks in ~/.claude too, in its own payload shape.
+            if parsed.as_ref().is_some_and(|v| v.get("cursor_version").is_some()) {
+                return;
+            }
+            let event = parsed.and_then(|v| v["hook_event_name"].as_str().map(str::to_string));
             // Approvals wait for the user (the agent's own timeout bounds us); everything else is quick.
             let wait = if event.as_deref() == Some("PermissionRequest") { None } else { Some(Duration::from_secs(2)) };
             let env: serde_json::Map<String, Value> = ENV_KEYS

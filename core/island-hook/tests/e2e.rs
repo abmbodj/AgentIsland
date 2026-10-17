@@ -89,6 +89,16 @@ fn the_islands_own_headless_runs_never_become_sessions() {
 }
 
 #[test]
+fn cursors_agent_never_becomes_a_session() {
+    let h = start("cursor");
+    h.hook("SessionStart", serde_json::json!({"session_id": "cur", "cursor_version": "2026.10.01", "hook_event_name": "sessionStart"}));
+    h.hook("SessionStart", serde_json::json!({}));
+    let ids: Vec<Value> = h.last()["sessions"].as_array().unwrap().iter().map(|s| s["id"].clone()).collect();
+    assert_eq!(ids.len(), 1);
+    assert_ne!(ids[0], "cur");
+}
+
+#[test]
 fn hook_captures_terminal_identity_from_its_environment() {
     let h = start("identity");
     h.hook("UserPromptSubmit", serde_json::json!({}));
