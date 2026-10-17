@@ -775,3 +775,88 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id
     assert!(lines[2].contains("--permission-mode plan"), "{args}");
     assert!(chats.login(&tools,id).is_err(), "signed in chats have nothing to replay");
 }
+
+#[test]
+fn claude_session_history_reads_the_file_tails_it_and_replies_without_duplicates() {
+    // The reply resumes the session and, like the CLI, appends its turn to the same file.
+    let reply = r##"read first
+echo "$@" > "$0.args"
+echo '{"type":"user","uuid":"u3","message":{"role":"user","content":"more"}}' >> "$(dirname "$0")/../hist-1.jsonl"
+echo '{"type":"system","subtype":"init","session_id":"hist-1"}'
+echo '{"type":"assistant","message":{"id":"m9","content":[{"type":"text","text":"Sure"}]}}'
+echo '{"type":"result","subtype":"success","is_error":false,"session_id":"hist-1"}'"##;
+    let (tools, root) = fixture("history", &[("claude", reply)]);
+    let file = root.join("hist-1.jsonl");
+    std::fs::write(&file, [
+        r#"{"type":"user","uuid":"u1","message":{"role":"user","content":"fix the bug"}}"#,
+        r#"{"type":"user","uuid":"m","isMeta":true,"message":{"role":"user","content":"meta"}}"#,
+        r#"{"type":"user","uuid":"c","message":{"role":"user","content":"<command-name>/clear</command-name>"}}"#,
+        r#"{"type":"assistant","uuid":"a1","message":{"id":"m1","content":[{"type":"thinking","thinking":"hm"}]}}"#,
+        r#"{"type":"assistant","uuid":"a2","message":{"id":"m1","content":[{"type":"text","text":"Looking"}]}}"#,
+        r#"{"type":"assistant","uuid":"a3","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#,
+        r#"{"type":"user","uuid":"u2","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"a.rs"}]}}"#,
+        r#"{"type":"assistant","uuid":"s1","isSidechain":true,"message":{"id":"m2","content":[{"type":"text","text":"subagent"}]}}"#,
+        r##"{"type":"assistant","uuid":"a4","message":{"id":"m3","content":[{"type":"tool_use","id":"t2","name":"ExitPlanMode","input":{"plan":"# Plan"}}]}}"##,
+        "",
+    ].join("\n")).unwrap();
+    let chats = Chats::default();
+    let (cwd, path) = (root.to_str().unwrap(), file.to_str().unwrap());
+    let id = chats.open_history("claude", cwd, "hist-1", path).unwrap();
+    assert_eq!(chats.open_history("claude", cwd, "hist-1", path).unwrap(), id, "one view per session");
+    assert!(chats.list().as_array().unwrap().is_empty(), "history views are not island chats");
+    let t = chats.transcript(id, 0).unwrap();
+    assert_eq!(kinds(&t), ["user", "assistant", "tool", "tool", "plan"]);
+    assert_eq!(t["entries"][2]["output"], "a.rs");
+    assert_eq!((t["plans"][0]["markdown"].as_str(), t["plans"][0]["status"].as_str()), (Some("# Plan"), Some("proposed")));
+
+    // Live tail: a half-written line waits for its newline.
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+    write!(f, r#"{{"type":"assistant","uuid":"a5","message":{{"id":"m4","content":[{{"type":"text","text":"Done"}}]}}}}"#).unwrap();
+    assert_eq!(kinds(&chats.transcript(id, 0).unwrap()).len(), 5);
+    writeln!(f).unwrap();
+    assert_eq!(chats.transcript(id, 0).unwrap()["entries"][5]["text"], "Done");
+
+    chats.send(&tools, id, "more", vec![], Settings::default()).unwrap();
+    let t = wait_for(&chats, id, "idle");
+    assert_eq!(kinds(&t), ["user", "assistant", "tool", "tool", "plan", "assistant", "user", "assistant"], "the reply's own file line is not read twice");
+    assert!(std::fs::read_to_string(root.join("bin/claude.args")).unwrap().contains("--resume hist-1"));
+    assert!(chats.request_handoff(id, "terminal").is_err());
+}
+
+#[test]
+fn codex_rollout_history_becomes_messages_tool_rows_and_plans() {
+    let (_, root) = fixture("codex-history", &[]);
+    let file = root.join("rollout.jsonl");
+    let item = |i: &str| format!(r#"{{"type":"event_msg","payload":{{"type":"item_completed","item":{i}}}}}"#);
+    std::fs::write(&file, [
+        r#"{"type":"session_meta","payload":{"id":"th"}}"#.to_string(),
+        r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"AGENTS.md"}]}}"#.into(),
+        item(r#"{"type":"UserMessage","id":"1","content":[{"type":"text","text":"hi"}]}"#),
+        item(r#"{"type":"Reasoning","id":"2"}"#),
+        item(r#"{"type":"AgentMessage","id":"3","content":[{"type":"Text","text":"Hello"}]}"#),
+        item(r#"{"type":"CommandExecution","id":"4","command":["/bin/zsh","-lc","ls"],"aggregated_output":"x","exit_code":1}"#),
+        item(r#"{"type":"FileChange","id":"5","changes":{"/a.rs":{"type":"add"}},"status":"completed"}"#),
+        item(r#"{"type":"McpToolCall","id":"6","tool":"js","arguments":{"code":"1"},"status":"completed","result":{"content":[{"type":"text","text":"ok"}]}}"#),
+        item(r##"{"type":"Plan","id":"7","text":"# Codex plan"}"##),
+        r#"{"type":"event_msg","payload":{"type":"user_message","message":"old style"}}"#.into(),
+        String::new(),
+    ].join("\n")).unwrap();
+    let chats = Chats::default();
+    let id = chats.open_history("codex", root.to_str().unwrap(), "th", file.to_str().unwrap()).unwrap();
+    let t = chats.transcript(id, 0).unwrap();
+    assert_eq!(kinds(&t), ["user", "assistant", "tool", "tool", "tool", "plan", "user"]);
+    let e = t["entries"].as_array().unwrap();
+    assert_eq!((e[2]["input"].as_str(), e[2]["status"].as_str()), (Some("ls"), Some("error")));
+    assert_eq!((e[3]["input"].as_str(), e[4]["output"].as_str()), (Some("/a.rs"), Some("ok")));
+    assert_eq!(t["plans"][0]["markdown"], "# Codex plan");
+}
+
+#[test]
+fn missing_history_file_says_so() {
+    let chats = Chats::default();
+    let id = chats.open_history("claude", "/tmp", "gone", "/nonexistent/gone.jsonl").unwrap();
+    let t = chats.transcript(id, 0).unwrap();
+    assert_eq!(t["entries"][0]["text"], "History not available.");
+    assert!(chats.open_history("claude", "/tmp", "x", "/etc/passwd").is_err());
+}

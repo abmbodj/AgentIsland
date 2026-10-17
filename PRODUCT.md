@@ -10,7 +10,7 @@ Developers who keep several local AI coding agents (Claude Code, Codex; CLI and 
 
 ## Product Purpose
 
-Agent Island is a status light that lives in the MacBook notch (or a slim top-center pill elsewhere). It detects agent sessions through each agent's official hooks, shows their state at a glance, lets the developer answer approvals and questions inline, and jumps to the exact terminal tab or pane when they want to look. A composer at the bottom of the panel starts a Claude Code or Codex session from a typed message and opens its conversation in place (a Back button returns to the session list); the island stays a status light first, never a chat client you keep open. Success: the developer forgets it is there until an agent needs them, answers in one keystroke or click, and never loses their place.
+Agent Island is a status light that lives in the MacBook notch (or a slim top-center pill elsewhere). It detects agent sessions through each agent's official hooks, shows their state at a glance, lets the developer answer approvals and questions inline, opens any session's conversation (read from the agent's own transcript) when its row is clicked, and jumps to the exact terminal tab or pane from there. A composer at the bottom of the panel starts a Claude Code or Codex session from a typed message and opens its conversation in place (a Back button returns to the session list); the island stays a status light first, never a chat client you keep open. Success: the developer forgets it is there until an agent needs them, answers in one keystroke or click, and never loses their place.
 
 ## Brand Personality
 

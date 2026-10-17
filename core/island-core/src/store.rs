@@ -126,6 +126,8 @@ pub struct Session {
     pub next_step: Option<Attention>,
     /// The desktop app offered to create a PR at the end of the turn: its recap, for the PR text.
     pub pr_offer: Option<String>,
+    /// The agent's own transcript file, from its hooks, for the history view.
+    pub transcript_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -343,6 +345,7 @@ impl Store {
                     file_changes: BTreeMap::new(),
                     next_step: None,
                     pr_offer: None,
+                    transcript_path: None,
                 });
                 self.sessions.len() - 1
             }
@@ -355,6 +358,7 @@ impl Store {
         let tool = p["tool_name"].as_str().unwrap_or_default();
         let agent_id = p["agent_id"].as_str();
         s.last_event = now;
+        if let Some(t) = p["transcript_path"].as_str().filter(|t| !t.is_empty()) { s.transcript_path = Some(t.into()) }
         let event = p["hook_event_name"].as_str().unwrap_or_default();
         if !s.identity_locked {
             let host = s.terminal.host_session.take();

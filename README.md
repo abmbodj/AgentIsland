@@ -1,6 +1,6 @@
 # Agent Island
 
-A calm, notch-style status light for local AI coding agents (Claude Code and Codex). It sits in your MacBook's notch, shows each agent session as a quiet dot, expands when an agent needs your approval or an answer, and jumps to the exact terminal tab when you click a session.
+A calm, notch-style status light for local AI coding agents (Claude Code and Codex). It sits in your MacBook's notch, shows each agent session as a quiet dot, expands when an agent needs your approval or an answer, and opens a session's conversation when you click it, with a Jump button to its exact terminal tab or app.
 
 Fully local: no accounts, no telemetry. The only network request is the optional update check.
 

@@ -47,6 +47,11 @@ impl PlanBook {
             }
         }
     }
+    /// A plan read from an external session's history: shown, but decided in its own app.
+    pub fn record(&mut self, markdown: &str, entry_index: usize) {
+        let version = self.latest().map_or(1, |p| p.version + 1);
+        self.documents.push(Plan { version, markdown: markdown.into(), status: "proposed", entry_index: Some(entry_index), error: None });
+    }
     pub fn decide(&mut self, version: u64, action: &str, feedback: &str) -> Result<(), String> {
         let p = self.documents.iter_mut().rev().find(|p| p.status != "unavailable").ok_or("No plan is ready.")?;
         if p.version != version || p.status != "ready" { return Err("That plan is no longer ready for a decision.".into()); }
