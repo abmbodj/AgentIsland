@@ -14,7 +14,7 @@ final class PanelModel: ObservableObject {
     /// Only tick the elapsed-time clock while the panel is open.
     @Published var isOpen = false {
         didSet {
-            if isOpen && !oldValue { refreshPRs(); refreshChats(); startPolling() }
+            if isOpen && !oldValue { refreshPRs(); refreshChats(); startPolling(); checkDiskAccess() }
             if !isOpen { planReader = nil; chat = nil; entries = []; composing = false; confirmingDelete = nil } // collapsing returns to the list; running chats carry on
         }
     }
@@ -63,6 +63,8 @@ final class PanelModel: ObservableObject {
     @Published var composeError: String?
     /// The folder macOS is asking about right now; the island lowers itself so the prompt shows.
     @Published var accessPrompt: String?
+    /// Full Disk Access is off and the offer to turn it on hasn't been dismissed.
+    @Published var needsDiskAccess = false
     var checkingAccess = false
     /// Each agent's model menu from the core (`chatOptions`).
     @Published var options: [String: AgentOptions] = [:]
@@ -230,7 +232,10 @@ struct PanelView: View {
     private var list: some View {
         TimelineView(.periodic(from: .now, by: model.isOpen ? 1 : 3600)) { ctx in
             VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 0) { CardArea(model: model) }
+                VStack(alignment: .leading, spacing: 0) {
+                    CardArea(model: model)
+                    DiskAccessBanner(model: model)
+                }
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0 }
                 // Panel padding is 4 top + 10 bottom.
                 let room = max(60, IslandView.panelMaxHeight - 14 - cardHeight - stripHeight)

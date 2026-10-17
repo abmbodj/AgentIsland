@@ -743,7 +743,7 @@ private struct QuestionCard: View {
     }
 }
 
-private struct BannerButton: View {
+struct BannerButton: View {
     let title: String
     let action: () -> Void
 
@@ -759,7 +759,7 @@ private struct BannerButton: View {
     }
 }
 
-private struct Banner<Action: View>: View {
+struct Banner<Action: View>: View {
     let title: String
     let detail: String
     @ViewBuilder var action: Action
@@ -777,6 +777,28 @@ private struct Banner<Action: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// Offers Full Disk Access so agents stop raising a macOS prompt per protected folder.
+struct DiskAccessBanner: View {
+    @ObservedObject var model: PanelModel
+
+    /// Only where chats run (the new-chat screen, or a list that has some), and never over a waiting card.
+    private var shown: Bool {
+        model.needsDiskAccess && model.current == nil && (model.screen == .compose || !model.chats.isEmpty)
+    }
+
+    var body: some View {
+        if shown {
+            Banner(title: "Stop the folder prompts", detail: "Agents you run here ask macOS for each folder they open. Add Agent Island under Full Disk Access (with + if it isn't listed) to allow them all at once.") {
+                HStack(spacing: 6) {
+                    BannerButton(title: "Open Settings") { model.openDiskAccessSettings() }
+                    BannerButton(title: "Not now") { model.dismissDiskAccess() }
+                }
+            }
+            .padding(.bottom, 6)
+        }
     }
 }
 
@@ -1038,6 +1060,7 @@ struct NewChatView: View {
                 .padding(.bottom, 4)
             }
             CardArea(model: model)
+            DiskAccessBanner(model: model)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                     AgentMark(agent: "claude", size: 14)

@@ -137,6 +137,20 @@ final class IslandController {
         observers.append((dnc, dnc.addObserver(forName: Self.debugName("jump"), object: nil, queue: .main) { [weak self] n in
             if let id = n.object as? String, let s = self?.snapshot.sessions.first(where: { $0.id == id }) { self?.jump(s) }
         }))
+        // Tap a session row by id, as a click would.
+        observers.append((dnc, dnc.addObserver(forName: Self.debugName("tap"), object: nil, queue: .main) { [weak self] n in
+            if let id = n.object as? String, let s = self?.model.snapshot.sessions.first(where: { $0.id == id }) { self?.model.tap(s) }
+        }))
+        // Writes what the panel shows (screen, open chat, chats and session ids) as JSON to a path under /tmp.
+        observers.append((dnc, dnc.addObserver(forName: Self.debugName("state"), object: nil, queue: .main) { [weak self] n in
+            guard let m = self?.model, let path = n.object as? String, path.hasPrefix("/tmp/") || path.hasPrefix("/private/tmp/") else { return }
+            let state: [String: Any] = [
+                "screen": "\(m.screen)", "chat": m.chat?.id ?? -1, "chatStatus": m.chatStatus, "entries": m.entries.count,
+                "chats": m.chats.map { ["id": $0.id, "sessionId": $0.sessionId ?? "", "status": $0.status] },
+                "sessions": m.snapshot.sessions.map { ["id": $0.id, "cwd": $0.cwd, "state": "\($0.state)"] },
+            ]
+            try? JSONSerialization.data(withJSONObject: state, options: .prettyPrinted).write(to: URL(fileURLWithPath: path))
+        }))
         observers.append((dnc, dnc.addObserver(forName: Self.debugName("openGroup"), object: nil, queue: .main) { [weak self] n in
             if let id = n.object as? String { self?.model.openGroups.insert(id) }
         }))

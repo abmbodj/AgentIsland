@@ -440,8 +440,28 @@ extension PanelModel {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [self] in
             guard !done else { return }
             accessPrompt = dir
-            composeError = "Waiting for you to allow access to \((dir as NSString).lastPathComponent) in the macOS prompt."
+            composeError = "Waiting for you to allow access to \((dir as NSString).lastPathComponent) in the macOS prompt. Full Disk Access in System Settings stops these for good."
         }
+    }
+
+    /// Agents run as this app's children, so every protected folder they touch (Desktop, Downloads, …) asks
+    /// macOS for Agent Island. Full Disk Access answers all of those once; it can't be requested, only granted
+    /// in System Settings, so the list offers it until it's on or you say not now.
+    func checkDiskAccess() {
+        // The user's TCC database opens only with Full Disk Access, and trying never shows a prompt.
+        let db = NSHomeDirectory() + "/Library/Application Support/com.apple.TCC/TCC.db"
+        let has = FileHandle(forReadingAtPath: db) != nil
+        let show = !has && !UserDefaults.standard.bool(forKey: "diskAccessDismissed")
+        if needsDiskAccess != show { needsDiskAccess = show }
+    }
+
+    func openDiskAccessSettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
+    }
+
+    func dismissDiskAccess() {
+        UserDefaults.standard.set(true, forKey: "diskAccessDismissed")
+        needsDiskAccess = false
     }
 
     /// Start a new chat from the composer.
