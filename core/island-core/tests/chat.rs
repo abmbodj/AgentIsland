@@ -628,7 +628,7 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id
     let t = wait_for(&chats,id,"idle");
     assert_eq!(t["plans"][0]["markdown"], "# Full plan\n\n- preserve content");
     assert_eq!(t["plans"][0]["status"], "ready");
-    assert!(kinds(&t).contains(&"plan".into()));
+    assert_eq!(kinds(&t).last().unwrap(), "plan", "the plan comes after the turn's text");
     assert!(chats.plan_action(&tools,id,1,"revise",Some("  ")).is_err());
     chats.plan_action(&tools,id,1,"revise",Some("Use tests")).unwrap();
     let t = wait_for(&chats,id,"idle");
@@ -651,14 +651,15 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id
 }
 
 #[test]
-fn incomplete_plans_are_unavailable_and_rejection_does_not_launch() {
+fn incomplete_plans_leave_no_card_and_rejection_does_not_launch() {
     let script = r##"printf '%s\n' '{"type":"assistant","message":{"id":"p","content":[{"type":"text","text":"# Partial"}]}}'
 exit 0"##;
     let (tools,root)=fixture("plan-incomplete", &[("claude",script)]);
     let chats=Chats::default();
     let id=chats.start(&tools,"claude",root.to_str().unwrap(),"plan",vec![],s(None,None,Some("plan"),false)).unwrap();
     let t=wait_for(&chats,id,"idle");
-    assert_eq!(t["plans"][0]["status"],"unavailable");
+    assert_eq!(t["plans"].as_array().unwrap().len(),0);
+    assert!(!kinds(&t).contains(&"plan".into()));
     assert!(chats.plan_action(&tools,id,1,"implement",None).is_err());
 
     let (tools,root)=fixture("plan-reject", &[("claude",CLAUDE)]);
@@ -722,6 +723,21 @@ fn explicit_revision_generation_failure_keeps_reviewed_plan_retryable() {
     let failed = wait_for(&chats,id,"failed");
     assert_eq!(failed["plans"][0]["status"], "ready");
     assert_eq!(failed["plans"][0]["markdown"], markdown);
-    assert_eq!(failed["plans"][1]["status"], "unavailable");
+    assert_eq!(failed["plans"].as_array().unwrap().len(), 1);
     chats.plan_action(&tools,id,1,"reject",None).unwrap();
+}
+
+#[test]
+fn signed_out_plan_turn_shows_one_sign_in_error_and_no_plan() {
+    // What `claude -p` prints when its OAuth session can't be refreshed.
+    let script = r##"printf '%s\n' '{"type":"assistant","message":{"id":"a","model":"<synthetic>","content":[{"type":"text","text":"Failed to authenticate: OAuth session expired and could not be refreshed"}]}}'
+printf '%s\n' '{"type":"result","subtype":"success","is_error":true,"result":"Failed to authenticate: OAuth session expired and could not be refreshed"}'
+exit 1"##;
+    let (tools, root) = fixture("plan-signed-out", &[("claude", script)]);
+    let chats = Chats::default();
+    let id = chats.start(&tools,"claude",root.to_str().unwrap(),"plan",vec![],s(None,None,Some("plan"),false)).unwrap();
+    let t = wait_for(&chats,id,"idle");
+    assert_eq!(t["plans"].as_array().unwrap().len(), 0);
+    assert_eq!(kinds(&t), ["user", "error"]);
+    assert!(t["entries"][1]["text"].as_str().unwrap().contains("/login"));
 }

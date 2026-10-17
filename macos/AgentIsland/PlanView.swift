@@ -8,8 +8,9 @@ extension PanelModel {
     var planVisibleEntries: [ChatEntry] {
         entries.filter { entry in
             guard entry.kind == "assistant" || (entry.kind == "tool" && entry.name == "ExitPlanMode") else { return true }
-            guard let anchor = plans.compactMap(\.entryIndex).last(where: { $0 < entry.index }) else { return true }
-            return entries.contains { $0.index > anchor && $0.index < entry.index && $0.kind == "user" }
+            // A finished plan sits after its turn and already holds that turn's text.
+            guard let anchor = plans.compactMap(\.entryIndex).first(where: { $0 > entry.index }) else { return true }
+            return entries.contains { $0.index > entry.index && $0.index < anchor && $0.kind == "user" }
         }
     }
 
@@ -71,15 +72,11 @@ struct InlinePlan: View {
     let plan: ChatPlan
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack { Label("Plan · v\(plan.version)", systemImage: "doc.text").fontWeight(.semibold); Spacer(); if plan.status != "writing" { Label(plan.status == "ready" ? "Ready for review" : plan.status.capitalized, systemImage: plan.status == "ready" ? "exclamationmark.circle" : "doc.text").foregroundStyle(plan.status == "ready" ? Color(nsColor: Theme.amber) : Color(nsColor: Theme.secondary)) } }
+            HStack { Label("Plan · v\(plan.version)", systemImage: "doc.text").fontWeight(.semibold); Spacer(); Label(plan.status == "ready" ? "Ready for review" : plan.status.capitalized, systemImage: plan.status == "ready" ? "exclamationmark.circle" : "doc.text").foregroundStyle(plan.status == "ready" ? Color(nsColor: Theme.amber) : Color(nsColor: Theme.secondary)) }
                 .font(.system(size: 12))
-            if plan.status == "writing" {
-                WritingPlanRow()
-            } else {
-                ScrollView { MarkdownDocument(markdown: plan.markdown).padding(.trailing, 4) }.frame(maxHeight: 220)
-                Button("Expand plan") { model.planVersion = plan.version; model.planReader = PlanReaderSource(); model.editingPlan = false }
-                    .buttonStyle(.borderless)
-            }
+            ScrollView { MarkdownDocument(markdown: plan.markdown).padding(.trailing, 4) }.frame(maxHeight: 220)
+            Button("Expand plan") { model.planVersion = plan.version; model.planReader = PlanReaderSource(); model.editingPlan = false }
+                .buttonStyle(.borderless)
             PlanActions(model: model, plan: plan, historical: model.plans.last(where: { $0.status != "unavailable" })?.version != plan.version)
         }.padding(10).background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
     }

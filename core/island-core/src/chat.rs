@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 const OUTPUT_LIMIT: usize = 4_000;
 const STDERR_LIMIT: usize = 600;
+const SIGNED_OUT: &str = "Claude Code is signed out. Open Terminal, run `claude`, sign in with /login, then send your message again.";
 const CLAUDE_MODES: &[&str] = &["plan", "acceptEdits", "auto", "bypassPermissions"];
 const CODEX_MODES: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
 
@@ -296,8 +297,17 @@ impl Transcript {
                     self.session_id = Some(s.into());
                 }
                 if v["is_error"] == true {
-                    let why = v["result"].as_str().or(v["subtype"].as_str()).unwrap_or("The agent stopped with an error.");
-                    self.error(why);
+                    let raw = v["result"].as_str().or(v["subtype"].as_str()).unwrap_or("The agent stopped with an error.");
+                    let why = if raw.contains("authenticate") || raw.contains("/login") { SIGNED_OUT } else { raw };
+                    // The CLI also echoes the failure as an assistant message; turn that into the one error row.
+                    match self.entries.iter().rposition(|e| e.kind == "assistant") {
+                        Some(i) if self.entries[i].text.trim() == raw.trim() => {
+                            let e = self.touch(i);
+                            e.kind = "error";
+                            e.text = why.into();
+                        }
+                        _ => self.error(why),
+                    }
                 }
                 return true;
             }
@@ -428,9 +438,8 @@ fn control(g: &mut State, v: &Value) {
         if g.planning_start.is_none() {
             // An authoritative proposal can follow Claude entering Plan mode itself.
             g.previous_mode = g.last.as_ref().and_then(|s| s.mode.clone()).filter(|m| m != "plan");
-            let anchor = g.transcript.push(Entry::new("plan", ""));
-            g.plans.begin(anchor);
-            g.planning_start = Some(anchor + 1);
+            g.plans.begin();
+            g.planning_start = Some(g.transcript.entries.len());
             if let Some(settings) = g.last.as_mut() { settings.mode = Some("plan".into()); }
         }
         if let Some(plan) = r["input"]["plan"].as_str() { g.native_plan = Some(plan.into()); }
@@ -769,9 +778,8 @@ impl Chats {
             g.planning_start = None;
             g.native_plan = None;
             if chat.agent == "claude" && settings.mode.as_deref() == Some("plan") {
-                let anchor = g.transcript.push(Entry::new("plan", ""));
-                g.plans.begin(anchor);
-                g.planning_start = Some(anchor + 1);
+                g.plans.begin();
+                g.planning_start = Some(g.transcript.entries.len());
             }
             g.last = Some(settings.clone());
             g.executing_plan = decision.is_some_and(|(_, action, _)| action == "implement");
@@ -795,7 +803,7 @@ impl Chats {
                 g.error = Some(e.clone());
                 g.status = Status::Failed;
                 g.planning_start = None;
-                g.plans.finish(false, Some(e.clone()));
+                g.plans.finish(None);
                 if let Some((version, _, _)) = decision { g.plans.launch_failed(version, &e); return Err(e); }
                 return Ok(());
             },
@@ -855,8 +863,10 @@ impl Chats {
             g.approval = None;
             g.executing_plan = false;
             if g.planning_start.take().is_some() {
-                let success = plan_success && finished && code == Some(0) && !g.stopping;
-                g.plans.finish(success, if success { None } else { Some("Plan generation did not complete. Retry planning.".into()) });
+                // Like Claude Code, the plan appears once, after the turn; a failed turn's output is never a plan.
+                let success = plan_success && finished && code == Some(0) && !g.stopping && g.plans.has_draft();
+                let anchor = success.then(|| g.transcript.push(Entry::new("plan", "")));
+                g.plans.finish(anchor);
             }
             if g.stopping {
                 g.transcript.notice("Stopped");
