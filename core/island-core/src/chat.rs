@@ -658,12 +658,13 @@ impl Chats {
             return Err(format!("{cwd} is not a folder."));
         }
         let title = if text.trim().is_empty() { "Image".to_string() } else { truncate(text.trim().lines().next().unwrap_or_default(), 60) };
-        let chat = self.insert(agent, cwd, title, false);
+        let chat = self.make(agent, cwd, title, false);
+        self.list.lock().unwrap_or_else(|e| e.into_inner()).insert(chat.id, chat.clone());
         Self::turn(tools, &chat, text, images, settings)?;
         Ok(chat.id)
     }
 
-    fn insert(&self, agent: &str, cwd: &str, title: String, external: bool) -> Arc<Chat> {
+    fn make(&self, agent: &str, cwd: &str, title: String, external: bool) -> Arc<Chat> {
         let id = {
             let mut n = self.next.lock().unwrap_or_else(|e| e.into_inner());
             *n += 1;
@@ -677,7 +678,6 @@ impl Chats {
             external,
             state: Mutex::new(State { transcript: Transcript::default(), plans: PlanBook::default(), planning_start: None, native_plan: None, previous_mode: None, status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None, handoff_token: 0, last: None, stdin: None, question: None, approval: None, executing_plan: false, retry: None, history: None }),
         });
-        self.list.lock().unwrap_or_else(|e| e.into_inner()).insert(id, chat.clone());
         chat
     }
 
@@ -686,10 +686,14 @@ impl Chats {
     pub fn open_history(&self, agent: &str, cwd: &str, session_id: &str, path: &str) -> Result<u64, String> {
         if !matches!(agent, "claude" | "codex") { return Err(format!("Unknown agent {agent}")) }
         if session_id.is_empty() || !path.ends_with(".jsonl") { return Err("This session has no history file.".into()) }
-        let existing = self.list.lock().unwrap_or_else(|e| e.into_inner()).values()
-            .find(|c| c.external && c.agent == agent && c.lock().transcript.session_id.as_deref() == Some(session_id)).cloned();
-        if let Some(c) = existing { return Ok(c.id) }
-        let chat = self.insert(agent, cwd, String::new(), true);
+        // One lock over lookup and insert, so two quick taps still share one view.
+        let mut list = self.list.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(c) = list.values().find(|c| c.external && c.agent == agent && c.lock().transcript.session_id.as_deref() == Some(session_id)) {
+            return Ok(c.id);
+        }
+        let chat = self.make(agent, cwd, String::new(), true);
+        list.insert(chat.id, chat.clone());
+        drop(list);
         let mut g = chat.lock();
         g.transcript.session_id = Some(session_id.into());
         g.history = Some(History { path: path.into(), offset: 0 });
