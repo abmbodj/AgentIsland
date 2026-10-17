@@ -314,7 +314,6 @@ private struct SessionRow: View {
     let now: Date
     @ObservedObject var model: PanelModel
     @State private var hover = false
-    @State private var pressed = false
 
     private var status: (String, Color) {
         switch session.state {
@@ -375,11 +374,10 @@ private struct SessionRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(pressed ? 0.11 : hover ? 0.07 : 0)))
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(hover ? 0.07 : 0)))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
-        // Press tint only; the tap stays a plain onTapGesture so the subagent chip's button still wins its own clicks.
-        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in pressed = true }.onEnded { _ in pressed = false })
+        // A plain tap, nothing beside it: a simultaneous press-tint DragGesture swallowed the tap on the never-key panel.
         .onTapGesture { model.tap(session) }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
