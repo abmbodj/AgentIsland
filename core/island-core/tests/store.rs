@@ -16,6 +16,19 @@ fn session_start_creates_idle_session_with_project_name() {
     assert_eq!(snap.sessions[0].state, State::Idle);
 }
 
+#[test]
+fn cursors_agent_running_claude_hooks_is_not_a_session() {
+    let mut s = Store::default();
+    let payload = json!({
+        "session_id": "c1", "conversation_id": "c1", "hook_event_name": "sessionStart",
+        "cursor_version": "2026.10.01", "workspace_roots": ["/tmp"],
+    });
+    let mut msg = claude("SessionStart", json!({}));
+    msg.payload = payload.to_string();
+    s.handle(&msg, T0);
+    assert!(s.snapshot().sessions.is_empty());
+}
+
 fn store_with_session() -> Store {
     let mut s = Store::default();
     s.handle(&claude("SessionStart", json!({})), T0);
