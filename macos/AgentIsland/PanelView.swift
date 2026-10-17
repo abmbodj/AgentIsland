@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 /// State shared between the island controller and the SwiftUI panel.
 final class PanelModel: ObservableObject {
@@ -14,8 +15,8 @@ final class PanelModel: ObservableObject {
     /// Only tick the elapsed-time clock while the panel is open.
     @Published var isOpen = false {
         didSet {
-            if isOpen && !oldValue { refreshPRs(); refreshChats(); startPolling(); checkDiskAccess() }
-            if !isOpen { planReader = nil; chat = nil; entries = []; composing = false; confirmingDelete = nil } // collapsing returns to the list; running chats carry on
+            if isOpen && !oldValue { SessionTitles.shared.load(); refreshPRs(); refreshChats(); startPolling(); checkDiskAccess() }
+            if !isOpen { editingTitle = nil; planReader = nil; chat = nil; entries = []; composing = false; confirmingDelete = nil } // collapsing returns to the list; running chats carry on
         }
     }
     /// Open PR button state and chosen base branch, by session id.
@@ -85,6 +86,47 @@ final class PanelModel: ObservableObject {
         let answers: [String: String]?
         let receipt: String
         let started: Date
+    }
+
+    /// A single inline title editor at a time. Never takes focus until explicitly requested.
+    @Published var editingTitle: [String]?
+    @Published var titleDraft = ""
+    private var titleChanges: AnyCancellable?
+
+    init() {
+        titleChanges = SessionTitles.shared.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+    }
+
+    func titleKeys(_ session: SessionInfo) -> [String] {
+        ["\(session.agent):\(session.id)"] + (chatFor(session).map { ["chat:\($0.id)"] } ?? [])
+    }
+
+    func titleKeys(_ chat: ChatInfo) -> [String] {
+        (chat.sessionId.map { ["\(chat.agent):\($0)"] } ?? []) + ["chat:\(chat.id)"]
+    }
+
+    func title(_ session: SessionInfo) -> String {
+        SessionTitles.shared.title(for: titleKeys(session), fallback: session.project)
+    }
+
+    func title(_ chat: ChatInfo) -> String {
+        SessionTitles.shared.title(for: titleKeys(chat), fallback: chat.title)
+    }
+
+    func isEditingTitle(_ keys: [String]) -> Bool {
+        keys.contains { editingTitle?.contains($0) == true }
+    }
+
+    func editTitle(keys: [String], title: String) {
+        titleDraft = title
+        editingTitle = keys
+        onSummon()
+    }
+
+    func saveTitle() {
+        guard let keys = editingTitle else { return }
+        SessionTitles.shared.save(titleDraft, for: keys)
+        editingTitle = nil
     }
 
     static let undoWindow: TimeInterval = 2
@@ -335,10 +377,7 @@ private struct SessionRow: View {
                 .frame(width: 18, height: 18)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(session.project.isEmpty ? "Session" : session.project)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(ink)
-                        .lineLimit(1)
+                    SessionTitle(model: model, keys: model.titleKeys(session), title: model.title(session))
                     Spacer(minLength: 8)
                     Text(Fmt.elapsed(session.since, now: now))
                         .font(.system(size: 11).monospacedDigit())
@@ -378,15 +417,17 @@ private struct SessionRow: View {
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         // A plain tap, nothing beside it: a simultaneous press-tint DragGesture swallowed the tap on the never-key panel.
-        .onTapGesture { model.tap(session) }
-        .accessibilityElement(children: .combine)
+        .onTapGesture { if model.editingTitle == nil { model.tap(session) } }
+        .accessibilityElement(children: model.isEditingTitle(model.titleKeys(session)) ? .contain : .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint(model.chatFor(session) != nil || session.transcriptPath != nil ? "Opens this conversation" : session.hasPlan ? "Opens this session’s plan" : "Shows this session's terminal")
         .contextMenu {
+            Button("Rename session") { model.editTitle(keys: model.titleKeys(session), title: model.title(session)) }
             if let c = model.chatFor(session) { Button("Delete chat") { model.confirmingDelete = c.id } }
         }
         // The row is one combined element, so its PR control is offered as actions.
         .accessibilityActions {
+            Button("Rename session") { model.editTitle(keys: model.titleKeys(session), title: model.title(session)) }
             switch model.pr[session.id] {
             case .ready: Button("Open pull request") { model.startPR(session) }
             case .staged: Button("Undo pull request") { model.undoPR(session.id) }

@@ -331,6 +331,21 @@ final class IslandController {
     /// Shortcuts while summoned. Returns true when handled.
     private func key(_ e: NSEvent) -> Bool {
         guard model.summoned else { return false }
+        // Title editing owns all keys, including Escape and approval shortcuts.
+        if model.editingTitle != nil {
+            if e.keyCode == 53 { model.editingTitle = nil; return true }
+            if e.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+               let editor = panel.firstResponder as? NSTextView {
+                switch e.charactersIgnoringModifiers?.lowercased() {
+                case "a": editor.selectAll(nil); return true
+                case "c": editor.copy(nil); return true
+                case "v": editor.paste(nil); return true
+                case "x": editor.cut(nil); return true
+                default: break
+                }
+            }
+            return false
+        }
         let typing = panel.firstResponder is NSTextView
         let cmd = e.modifierFlags.contains(.command)
         let chars = e.charactersIgnoringModifiers?.lowercased() ?? ""

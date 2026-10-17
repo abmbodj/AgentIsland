@@ -126,7 +126,7 @@ private struct CardView: View {
             AgentBadge(agent: session.agent, state: .needsInput, size: 13)
                 .frame(width: 15, height: 15)
                 .accessibilityValue("Needs your input")
-            Text(session.project.isEmpty ? "Session" : session.project)
+            Text(model.title(session))
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(ink)
                 .lineLimit(1)
