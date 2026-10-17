@@ -477,7 +477,7 @@ struct ChatView: View {
             Spacer(minLength: 0)
             if let c = model.chat {
                 AgentMark(agent: c.agent, size: 12).accessibilityHidden(true)
-                Text(c.title).font(.system(size: 12, weight: .semibold)).foregroundStyle(ink).lineLimit(1).truncationMode(.tail)
+                Text(model.title(c)).font(.system(size: 12, weight: .semibold)).foregroundStyle(ink).lineLimit(1).truncationMode(.tail)
             }
             Spacer(minLength: 0)
             Text(statusText).font(.system(size: 11)).foregroundStyle(secondary)
@@ -1211,7 +1211,7 @@ struct DeleteConfirm: View {
         .padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Delete \(chat.title)?")
+        .accessibilityLabel("Delete \(model.title(chat))?")
     }
 }
 
@@ -1243,7 +1243,7 @@ struct ChatRow: View {
         HStack(spacing: 10) {
             AgentBadge(agent: chat.agent, state: state, size: 16).frame(width: 18, height: 18)
             VStack(alignment: .leading, spacing: 2) {
-                Text(chat.title).font(.system(size: 13, weight: .semibold)).foregroundStyle(ink).lineLimit(1)
+                SessionTitle(model: model, keys: model.titleKeys(chat), title: model.title(chat))
                 Text(status).font(.system(size: 11)).foregroundStyle(secondary)
             }
             Spacer(minLength: 8)
@@ -1261,12 +1261,18 @@ struct ChatRow: View {
         .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(hover ? 0.07 : 0)))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
-        .onTapGesture { model.openChat(chat) }
-        .contextMenu { Button("Delete chat") { model.confirmingDelete = chat.id } }
-        .accessibilityElement(children: .combine)
+        .onTapGesture { if model.editingTitle == nil { model.openChat(chat) } }
+        .contextMenu {
+            Button("Rename session") { model.editTitle(keys: model.titleKeys(chat), title: model.title(chat)) }
+            Button("Delete chat") { model.confirmingDelete = chat.id }
+        }
+        .accessibilityElement(children: model.isEditingTitle(model.titleKeys(chat)) ? .contain : .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Opens this conversation")
-        .accessibilityActions { Button("Delete chat") { model.confirmingDelete = chat.id } }
+        .accessibilityActions {
+            Button("Rename session") { model.editTitle(keys: model.titleKeys(chat), title: model.title(chat)) }
+            Button("Delete chat") { model.confirmingDelete = chat.id }
+        }
     }
 }
 
