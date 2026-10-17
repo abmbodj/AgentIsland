@@ -595,8 +595,8 @@ pub struct Chat {
     pub agent: String,
     pub cwd: String,
     title: String,
-    /// A hook-reported session's history, opened from its row: not listed as an island chat.
-    external: bool,
+    /// A hook-reported session's history, opened from its row: its session id. Not listed as an island chat.
+    external: Option<String>,
     state: Mutex<State>,
 }
 
@@ -658,13 +658,13 @@ impl Chats {
             return Err(format!("{cwd} is not a folder."));
         }
         let title = if text.trim().is_empty() { "Image".to_string() } else { truncate(text.trim().lines().next().unwrap_or_default(), 60) };
-        let chat = self.make(agent, cwd, title, false);
+        let chat = self.make(agent, cwd, title, None);
         self.list.lock().unwrap_or_else(|e| e.into_inner()).insert(chat.id, chat.clone());
         Self::turn(tools, &chat, text, images, settings)?;
         Ok(chat.id)
     }
 
-    fn make(&self, agent: &str, cwd: &str, title: String, external: bool) -> Arc<Chat> {
+    fn make(&self, agent: &str, cwd: &str, title: String, external: Option<String>) -> Arc<Chat> {
         let id = {
             let mut n = self.next.lock().unwrap_or_else(|e| e.into_inner());
             *n += 1;
@@ -688,10 +688,10 @@ impl Chats {
         if session_id.is_empty() || !path.ends_with(".jsonl") { return Err("This session has no history file.".into()) }
         // One lock over lookup and insert, so two quick taps still share one view.
         let mut list = self.list.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(c) = list.values().find(|c| c.external && c.agent == agent && c.lock().transcript.session_id.as_deref() == Some(session_id)) {
+        if let Some(c) = list.values().find(|c| c.agent == agent && c.external.as_deref() == Some(session_id)) {
             return Ok(c.id);
         }
-        let chat = self.make(agent, cwd, String::new(), true);
+        let chat = self.make(agent, cwd, String::new(), Some(session_id.into()));
         list.insert(chat.id, chat.clone());
         drop(list);
         let mut g = chat.lock();
@@ -749,7 +749,7 @@ impl Chats {
 
     pub fn request_handoff(&self, id: u64, target: &str) -> Result<(), String> {
         let chat = self.get(id)?;
-        if chat.external { return Err("Jump to this session to continue it in its own app.".into()) }
+        if chat.external.is_some() { return Err("Jump to this session to continue it in its own app.".into()) }
         match target {
             "terminal" | "iterm" | "ghostty" => {},
             "claudeDesktop" if chat.agent == "claude" => {},
@@ -886,7 +886,7 @@ impl Chats {
     }
 
     pub fn list(&self) -> Value {
-        let mut chats: Vec<_> = self.list.lock().unwrap_or_else(|e| e.into_inner()).values().filter(|c| !c.external).cloned().collect();
+        let mut chats: Vec<_> = self.list.lock().unwrap_or_else(|e| e.into_inner()).values().filter(|c| c.external.is_none()).cloned().collect();
         chats.sort_by_key(|c| c.id);
         Value::Array(chats.iter().map(|c| c.summary()).collect())
     }
