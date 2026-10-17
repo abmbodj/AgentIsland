@@ -2,7 +2,7 @@
 
 ## Before building a feature
 
-Agent Island must stay lightweight (see Lightweight in `PRODUCT.md`). Check the feature against those budgets, and put its cost and tradeoff in the plan and the PR description.
+Agent Island must stay lightweight (see Lightweight in `PRODUCT.md`). Check the feature against those budgets, and put its cost and tradeoff in the PR description (and the plan, if there is one).
 
 ## Finishing a change
 

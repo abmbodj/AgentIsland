@@ -38,15 +38,15 @@ Being light is a core principle, weighed against every feature. A status light t
 
 **Budgets** (measured on the M2 Air, October 2026):
 
-- **Idle is zero.** Collapsed, with no hook events arriving: 0% CPU, no timers, no polling. Work happens only on a hook event, a process exit (kqueue), or the core's next scheduled state deadline. Motion runs in Core Animation, outside our process. Measured: 0.0% CPU and no new wakeups across 12 s samples.
+- **Idle is zero.** Collapsed, with no hook events arriving: 0% CPU and no polling. Work happens only on a hook event, a process exit (kqueue), the core's next scheduled state deadline, or your own input (a click, an app switch). Motion runs in Core Animation, outside our process. Measured: 0.0% CPU and no new wakeups across 12 s samples.
 - **Memory under 60 MB resident.** Measured 31 to 51 MB.
-- **Startup spawns nothing.** Launch binds the socket, refreshes the bundled hook binary and starts idle threads. No child processes, no folder scans, and no network beyond Sparkle's own scheduled update check when it's due. Anything a screen needs is loaded when that screen opens.
+- **Startup spawns nothing.** Launch binds the socket, refreshes the bundled hook binary and starts idle threads. No child processes, no folder scans, and no network beyond Sparkle's own scheduled update check when it's due. Anything a screen needs is loaded when that screen opens. Exception: first-run Setup, which inspects the agents' config and editor extensions (and briefly runs `codex app-server`) to show its diff.
 - **The hook stays tiny.** One short-lived process per agent event, std plus `libc` and `serde_json`, failing open at once when the island isn't running. It must never slow the agent down.
-- **Polling only while it's visible.** A screen that has to pull from the core (an open conversation) stops pulling the moment it closes, and asks only for what changed.
+- **Polling only while it's visible.** The open panel pulls from the core and stops when it collapses, except to finish a handoff or a model-list fetch already under way. Pull only what changed.
 - **Few dependencies.** Swift: Sparkle only. Rust core: `libc`, `serde`, `serde_json`, `sha2`, `similar`. Bundle under 15 MB (measured 9.9 MB).
 - **A small surface.** Prefer a good default to a setting, and a row or card to a new screen.
 
-**Evaluating a feature.** Before building it, answer in its plan or PR:
+**Evaluating a feature.** Before building it, answer these in its PR description (and its plan, if there is one):
 
 1. What does it cost while collapsed and idle? Anything above zero needs a strong reason.
 2. Does it add work, processes or I/O at launch? Move it to first use.
