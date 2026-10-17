@@ -31,6 +31,9 @@ struct ChatEntry: Decodable, Equatable, Identifiable {
     var caption: String
     /// User rows: how many images went with the message.
     var images: Int
+    /// Edit/MultiEdit/Write rows: lines the change adds and removes.
+    var added: Int
+    var removed: Int
     var id: Int { index }
 }
 
