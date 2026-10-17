@@ -443,6 +443,7 @@ struct ChatView: View {
 
     private var statusText: String {
         if model.disconnected { return "Disconnected" }
+        if model.working { return "Working" }
         switch model.chatStatus {
         case "running": return "Working"
         case "failed": return "Failed"
@@ -481,7 +482,14 @@ struct ChatView: View {
             Spacer(minLength: 0)
             Text(statusText).font(.system(size: 11)).foregroundStyle(secondary)
                 .accessibilityLabel("Status: \(statusText)")
-            if let c = model.chat {
+            if let s = model.historySession {
+                Button { model.onJump(s) } label: {
+                    Image(systemName: "arrow.up.forward.app").font(.system(size: 12)).foregroundStyle(secondary).frame(width: 28, height: 26).contentShape(Rectangle())
+                }
+                .buttonStyle(IslandButtonStyle(radius: 6))
+                .accessibilityLabel("Jump to session")
+                .help(s.isDesktop ? "Open this session in its app" : "Show this session's terminal")
+            } else if let c = model.chat {
                 Menu {
                     ForEach(HandoffDestination.choices(agent: c.agent)) { destination in
                         Button(destination.appURL == nil ? "\(destination.name) (not installed)" : destination.name) {
@@ -544,8 +552,18 @@ struct ChatView: View {
                 .foregroundStyle(ink)
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.07)))
-            } else {
+            } else if model.canReply {
                 Composer(model: model, mode: .reply)
+            } else if let s = model.historySession {
+                HStack(spacing: 8) {
+                    Text(s.isDesktop ? "Reply in the desktop app" : "Open in terminal to reply")
+                        .font(.system(size: 12)).foregroundStyle(secondary)
+                    Spacer(minLength: 0)
+                    Button("Jump") { model.onJump(s) }.buttonStyle(.borderless)
+                }
+                .foregroundStyle(ink)
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.07)))
             }
         }
     }
@@ -567,7 +585,7 @@ struct ChatView: View {
                     }
                     if let q = model.chatQuestion {
                         QuestionCard(model: model, questions: q).transition(.rise)
-                    } else if model.chatStatus == "running" && !model.disconnected {
+                    } else if model.working && !model.disconnected {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.mini)
                             Text("Working").font(.system(size: 12)).foregroundStyle(secondary)
@@ -641,7 +659,7 @@ struct ChatView: View {
     private var empty: some View {
         VStack(spacing: 4) {
             Text("No messages yet").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
-            Text("Your first message is on its way.").font(.system(size: 11)).foregroundStyle(secondary)
+            Text(model.chat?.session == nil ? "Your first message is on its way." : "This session hasn't said anything yet.").font(.system(size: 11)).foregroundStyle(secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 60)

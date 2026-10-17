@@ -508,6 +508,10 @@ impl Core {
             }
             "transcript" => self.chats.transcript(req["id"].as_u64().unwrap_or_default(), req["since"].as_u64().unwrap_or_default()),
             "chatList" => Ok(self.chats.list()),
+            "chatHistory" => {
+                let s = |k: &str| req[k].as_str().unwrap_or_default();
+                self.chats.open_history(s("agent"), s("cwd"), s("sessionId"), s("path")).map(|id| json!({"id": id}))
+            }
             "snapshot" => Ok(serde_json::from_str(&Inner::snapshot_json(&self.inner.lock())).unwrap_or(Value::Null)),
             op => Err(format!("unknown op {op}")),
         };

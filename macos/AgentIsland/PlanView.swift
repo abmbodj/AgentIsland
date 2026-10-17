@@ -7,7 +7,8 @@ struct PlanReaderSource: Equatable {
 extension PanelModel {
     var planVisibleEntries: [ChatEntry] {
         entries.filter { entry in
-            guard entry.kind == "assistant" || (entry.kind == "tool" && entry.name == "ExitPlanMode") else { return true }
+            // A history's plan is only the proposal, so its turn's text stays.
+            guard chat?.session == nil, entry.kind == "assistant" || (entry.kind == "tool" && entry.name == "ExitPlanMode") else { return true }
             // A finished plan sits after its turn and already holds that turn's text.
             guard let anchor = plans.compactMap(\.entryIndex).first(where: { $0 > entry.index }) else { return true }
             return entries.contains { $0.index > entry.index && $0.index < anchor && $0.kind == "user" }

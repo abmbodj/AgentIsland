@@ -27,6 +27,12 @@ struct SessionInfo: Decodable, Equatable, Identifiable {
     /// The desktop app offered to create a PR: its recap.
     var prOffer: String?
     var plans: [ChatPlan]?
+    /// The agent's own transcript file, for the history view.
+    var transcriptPath: String?
+    /// Inside the Claude or Codex desktop app, which keeps the conversation to itself.
+    var isDesktop: Bool {
+        terminal.hostSession != nil || [Jumper.App.claudeDesktop.rawValue, Jumper.App.codexDesktop.rawValue].contains(terminal.bundleId)
+    }
     var hasPlan: Bool { !(plans ?? []).isEmpty || pending.contains { $0.kind == "plan" || $0.tool == "ExitPlanMode" } }
 }
 

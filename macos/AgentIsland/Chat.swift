@@ -15,6 +15,8 @@ struct ChatInfo: Decodable, Equatable, Identifiable {
     var handoff: ChatHandoff?
     var handoffError: String?
     var settings: TurnSettings?
+    /// A history view of a session the island didn't start (its row as first opened); nil for island chats.
+    var session: SessionInfo?
 }
 
 struct ChatEntry: Decodable, Equatable, Identifiable {
@@ -373,11 +375,43 @@ extension PanelModel {
 
     func chatFor(_ s: SessionInfo) -> ChatInfo? { chats.first { $0.sessionId == s.id } }
 
-    /// A session row opens its chat when it has one, else jumps to the terminal.
+    /// A session row opens its chat, else its history from the agent's transcript; with neither it opens
+    /// the plan or jumps to the terminal.
     func tap(_ s: SessionInfo) {
         // The chat list is only polled while open, so a just-started chat may not be linked to its row yet.
         if chatFor(s) == nil { refreshChats() }
-        if let c = chatFor(s) { openChat(c) } else if s.hasPlan { openSessionPlan(s) } else { onJump(s) }
+        if let c = chatFor(s) { openChat(c); return }
+        let fallback = { [self] in if s.hasPlan { openSessionPlan(s) } else { onJump(s) } }
+        guard let path = s.transcriptPath else { return fallback() }
+        // A long transcript takes a moment to read; off the main thread so the island never stalls.
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let r = try? CoreBridge.shared.call(["op": "chatHistory", "agent": s.agent, "cwd": s.cwd, "sessionId": s.id, "path": path], as: ChatStarted.self)
+            DispatchQueue.main.async { [self] in
+                guard isOpen, chat == nil else { return } // collapsed or moved on meanwhile
+                guard let r else { return fallback() }
+                openChat(ChatInfo(id: r.id, agent: s.agent, cwd: s.cwd, title: s.project, status: "idle", sessionId: s.id, session: s))
+            }
+        }
+    }
+
+    /// The agent is working: this chat's own turn, or the history's session in its terminal or app.
+    var working: Bool {
+        chatStatus == "running" || [.working, .needsInput].contains(historySession?.state)
+    }
+
+    /// The open history's session as the hooks report it now (as first opened once it has left the list).
+    var historySession: SessionInfo? {
+        chat?.session.map { s in snapshot.sessions.first { $0.id == s.id && $0.agent == s.agent } ?? s }
+    }
+
+    /// A session the island didn't start takes replies only once its own process is gone, so a terminal
+    /// still open on it never forks; desktop apps keep theirs, so never there.
+    var canReply: Bool {
+        guard let s = historySession, chatStatus != "running" else { return true }
+        if s.isDesktop { return false }
+        if [.ended, .stale].contains(s.state) { return true }
+        guard let pid = s.pid else { return false }
+        return kill(pid, 0) != 0 && errno == ESRCH
     }
 
     func openChat(_ c: ChatInfo) {
@@ -407,6 +441,8 @@ extension PanelModel {
     /// Back to the session list; not animated when the panel is collapsing.
     func closeChat(animated: Bool = true) {
         let change = { [self] in
+            // A history view is rebuilt from its file on the next open; free it unless a reply is still running.
+            if let c = chat, c.session != nil, chatStatus != "running" { _ = try? CoreBridge.shared.call(["op": "chatDelete", "id": c.id]) }
             chat = nil
             replySettings = nil
             chatQuestion = nil
@@ -490,7 +526,7 @@ extension PanelModel {
     /// Send the next turn in the open chat.
     func sendChat() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let c = chat, c.handoff == nil, !text.isEmpty || !images.isEmpty, chatStatus != "running" else { return }
+        guard let c = chat, c.handoff == nil, canReply, !text.isEmpty || !images.isEmpty, chatStatus != "running" else { return }
         withFolderAccess(c.cwd) { [self] in
             do {
                 _ = try CoreBridge.shared.call(["op": "chatSend", "id": c.id, "text": text, "images": imagePayload, "settings": settings(reply: true).dict])
@@ -540,7 +576,7 @@ extension PanelModel {
 
     /// After a failed turn: send the last message again.
     func retryChat() {
-        guard let c = chat, c.handoff == nil, let last = entries.last(where: { $0.kind == "user" }) else { return }
+        guard let c = chat, c.handoff == nil, canReply, let last = entries.last(where: { $0.kind == "user" }) else { return }
         // ponytail: retry resends the text only; images aren't kept.
         guard !last.text.isEmpty else { composeError = "Attach the image again and send it as a new message."; return }
         do {

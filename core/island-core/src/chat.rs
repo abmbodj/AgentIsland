@@ -6,7 +6,7 @@ use crate::plan::PlanBook;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{ChildStdin, Command, Stdio};
@@ -363,6 +363,91 @@ impl Transcript {
         matches!(v["type"].as_str(), Some("turn.completed" | "turn.failed"))
     }
 
+    /// Fold one line of a session's own transcript file (Claude's `.jsonl`, Codex's rollout).
+    /// Main thread only. Returns a proposed plan's markdown, for the caller to place.
+    fn apply_file(&mut self, agent: &str, v: &Value) -> Option<String> {
+        if agent == "claude" { self.apply_claude_file(v) } else { self.apply_codex_file(v) }
+    }
+
+    fn apply_claude_file(&mut self, v: &Value) -> Option<String> {
+        if v["isSidechain"] == true || v["isMeta"] == true { return None }
+        let m = &v["message"];
+        let uuid = v["uuid"].as_str().unwrap_or_default();
+        let blocks: Vec<Value> = match &m["content"] {
+            Value::String(t) => vec![json!({"type": "text", "text": t})],
+            Value::Array(a) => a.clone(),
+            _ => return None,
+        };
+        let mut plan = None;
+        match v["type"].as_str() {
+            Some("user") => {
+                // Slash-command wrappers and injected notices aren't something the user typed.
+                let wrapper = |t: &str| ["<command-", "<local-command", "<task-notification", "<system-reminder", "<bash-", "Caveat:"].iter().any(|w| t.trim_start().starts_with(w));
+                let text: Vec<&str> = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).filter(|t| !wrapper(t)).collect();
+                let images = blocks.iter().filter(|b| b["type"] == "image").count();
+                if !text.is_empty() || images > 0 { self.user(&text.join("\n\n"), String::new(), images) }
+                for b in blocks.iter().filter(|b| b["type"] == "tool_result") {
+                    self.tool_result(b["tool_use_id"].as_str().unwrap_or_default(), &result_text(&b["content"]), b["is_error"] == true);
+                }
+            }
+            Some("assistant") => {
+                for (i, b) in blocks.iter().enumerate() {
+                    match b["type"].as_str() {
+                        Some("text") => self.set_text(format!("file:{uuid}:{i}"), b["text"].as_str().unwrap_or_default(), false),
+                        Some("tool_use") => {
+                            self.tool(b["id"].as_str().unwrap_or_default(), b["name"].as_str().unwrap_or_default(), &b["input"]);
+                            if b["name"] == "ExitPlanMode" { plan = b["input"]["plan"].as_str().map(str::to_string) }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        plan
+    }
+
+    fn apply_codex_file(&mut self, v: &Value) -> Option<String> {
+        let p = &v["payload"];
+        if v["type"] != "event_msg" { return None }
+        let joined = |c: &Value| c.as_array().into_iter().flatten().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n");
+        match p["type"].as_str() {
+            // Older rollouts carry plain message events instead of items.
+            Some("user_message") => self.user(p["message"].as_str().unwrap_or_default(), String::new(), 0),
+            Some("agent_message") => { self.push(Entry::new("assistant", p["message"].as_str().unwrap_or_default())); }
+            Some("item_completed") => {
+                let it = &p["item"];
+                let key = format!("file:{}", it["id"].as_str().unwrap_or_default());
+                match it["type"].as_str() {
+                    Some("UserMessage") => {
+                        let images = it["content"].as_array().into_iter().flatten().filter(|b| b["type"] != "text").count();
+                        self.user(&joined(&it["content"]), String::new(), images)
+                    }
+                    Some("AgentMessage") => self.set_text(key, &joined(&it["content"]), false),
+                    Some("CommandExecution") => {
+                        // The command is argv, e.g. ["/bin/zsh", "-lc", "<script>"]; the script is what a human recognises.
+                        let cmd = match &it["command"] { Value::Array(a) => a.last().cloned().unwrap_or_default(), c => c.clone() };
+                        self.tool(&key, "shell", &json!({"command": cmd}));
+                        self.tool_result(&key, it["aggregated_output"].as_str().unwrap_or_default(), it["exit_code"].as_i64().is_some_and(|c| c != 0));
+                    }
+                    Some("FileChange") => {
+                        let paths: Vec<&str> = it["changes"].as_object().into_iter().flatten().map(|(k, _)| k.as_str()).collect();
+                        self.tool(&key, "edit", &json!({"path": paths.join(", ")}));
+                        self.tool_result(&key, it["stdout"].as_str().unwrap_or_default(), it["status"] == "failed");
+                    }
+                    Some("McpToolCall") => {
+                        self.tool(&key, it["tool"].as_str().unwrap_or("tool"), &it["arguments"]);
+                        self.tool_result(&key, &result_text(&it["result"]["content"]), it["status"] == "failed");
+                    }
+                    Some("Plan") => return it["text"].as_str().map(str::to_string),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
     fn since(&self, rev: u64) -> Vec<Value> {
         let mut out = Vec::new();
         for (i, e) in self.entries.iter().enumerate().filter(|(_, e)| e.rev > rev) {
@@ -423,6 +508,35 @@ struct State {
     executing_plan: bool,
     /// The last turn as asked, replayed after signing in.
     retry: Option<Retry>,
+    /// External sessions: their transcript file.
+    history: Option<History>,
+}
+
+/// A hook-reported session's own transcript file, read into the chat view as it grows.
+struct History {
+    path: PathBuf,
+    offset: u64,
+}
+
+/// Fold the file's new complete lines. While our own reply turn runs its stream fills the transcript,
+/// and the turn's end skips the file past what it wrote.
+fn tail(g: &mut State, agent: &str) {
+    if g.status == Status::Running { return }
+    let Some(h) = g.history.as_mut() else { return };
+    let Ok(mut f) = std::fs::File::open(&h.path) else { return };
+    let len = f.metadata().map_or(0, |m| m.len());
+    if len <= h.offset || f.seek(SeekFrom::Start(h.offset)).is_err() { return }
+    let mut buf = Vec::new();
+    if f.take(len - h.offset).read_to_end(&mut buf).is_err() { return }
+    let Some(end) = buf.iter().rposition(|&b| b == b'\n').map(|i| i + 1) else { return }; // a line still being written waits
+    h.offset += end as u64;
+    for line in buf[..end].split(|&b| b == b'\n') {
+        let Ok(v) = serde_json::from_slice::<Value>(line) else { continue };
+        if let Some(markdown) = g.transcript.apply_file(agent, &v) {
+            let anchor = g.transcript.push(Entry::new("plan", ""));
+            g.plans.record(&markdown, anchor);
+        }
+    }
 }
 
 struct Retry {
@@ -490,6 +604,8 @@ pub struct Chat {
     pub agent: String,
     pub cwd: String,
     title: String,
+    /// A hook-reported session's history, opened from its row: its session id. Not listed as an island chat.
+    external: Option<String>,
     state: Mutex<State>,
 }
 
@@ -550,22 +666,49 @@ impl Chats {
         if !std::path::Path::new(cwd).is_dir() {
             return Err(format!("{cwd} is not a folder."));
         }
+        let title = if text.trim().is_empty() { "Image".to_string() } else { truncate(text.trim().lines().next().unwrap_or_default(), 60) };
+        let chat = self.make(agent, cwd, title, None);
+        self.list.lock().unwrap_or_else(|e| e.into_inner()).insert(chat.id, chat.clone());
+        Self::turn(tools, &chat, text, images, settings)?;
+        Ok(chat.id)
+    }
+
+    fn make(&self, agent: &str, cwd: &str, title: String, external: Option<String>) -> Arc<Chat> {
         let id = {
             let mut n = self.next.lock().unwrap_or_else(|e| e.into_inner());
             *n += 1;
             *n
         };
-        let title = if text.trim().is_empty() { "Image".to_string() } else { truncate(text.trim().lines().next().unwrap_or_default(), 60) };
         let chat = Arc::new(Chat {
             id,
             agent: agent.into(),
             cwd: cwd.into(),
             title,
-            state: Mutex::new(State { transcript: Transcript::default(), plans: PlanBook::default(), planning_start: None, native_plan: None, previous_mode: None, status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None, handoff_token: 0, last: None, stdin: None, question: None, approval: None, executing_plan: false, retry: None }),
+            external,
+            state: Mutex::new(State { transcript: Transcript::default(), plans: PlanBook::default(), planning_start: None, native_plan: None, previous_mode: None, status: Status::Idle, error: None, pid: None, stopping: false, handoff: None, handoff_error: None, handoff_token: 0, last: None, stdin: None, question: None, approval: None, executing_plan: false, retry: None, history: None }),
         });
-        self.list.lock().unwrap_or_else(|e| e.into_inner()).insert(id, chat.clone());
-        Self::turn(tools, &chat, text, images, settings)?;
-        Ok(id)
+        chat
+    }
+
+    /// Open a hook-reported session's history from its transcript file; the same session reopens the same view.
+    /// Replies resume the session headless, one turn at a time, and the session stays the agent's own.
+    pub fn open_history(&self, agent: &str, cwd: &str, session_id: &str, path: &str) -> Result<u64, String> {
+        if !matches!(agent, "claude" | "codex") { return Err(format!("Unknown agent {agent}")) }
+        if session_id.is_empty() || !path.ends_with(".jsonl") { return Err("This session has no history file.".into()) }
+        // One lock over lookup and insert, so two quick taps still share one view.
+        let mut list = self.list.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(c) = list.values().find(|c| c.agent == agent && c.external.as_deref() == Some(session_id)) {
+            return Ok(c.id);
+        }
+        let chat = self.make(agent, cwd, String::new(), Some(session_id.into()));
+        list.insert(chat.id, chat.clone());
+        drop(list);
+        let mut g = chat.lock();
+        g.transcript.session_id = Some(session_id.into());
+        g.history = Some(History { path: path.into(), offset: 0 });
+        tail(&mut g, agent);
+        if g.transcript.entries.is_empty() && std::fs::File::open(path).is_err() { g.transcript.notice("History not available.") }
+        Ok(chat.id)
     }
 
     fn get(&self, id: u64) -> Result<Arc<Chat>, String> {
@@ -615,6 +758,7 @@ impl Chats {
 
     pub fn request_handoff(&self, id: u64, target: &str) -> Result<(), String> {
         let chat = self.get(id)?;
+        if chat.external.is_some() { return Err("Jump to this session to continue it in its own app.".into()) }
         match target {
             "terminal" | "iterm" | "ghostty" => {},
             "claudeDesktop" if chat.agent == "claude" => {},
@@ -738,7 +882,8 @@ impl Chats {
 
     pub fn transcript(&self, id: u64, since: u64) -> Result<Value, String> {
         let chat = self.get(id)?;
-        let g = chat.lock();
+        let mut g = chat.lock();
+        tail(&mut g, &chat.agent);
         Ok(json!({
             "status": g.status.name(), "error": g.error, "sessionId": g.transcript.session_id,
             "handoff": g.handoff, "handoffError": g.handoff_error, "settings": g.last,
@@ -750,7 +895,7 @@ impl Chats {
     }
 
     pub fn list(&self) -> Value {
-        let mut chats: Vec<_> = self.list.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect();
+        let mut chats: Vec<_> = self.list.lock().unwrap_or_else(|e| e.into_inner()).values().filter(|c| c.external.is_none()).cloned().collect();
         chats.sort_by_key(|c| c.id);
         Value::Array(chats.iter().map(|c| c.summary()).collect())
     }
@@ -923,6 +1068,7 @@ impl Chats {
             let code = child.wait().ok().and_then(|s| s.code());
             let stderr = stderr.join().unwrap_or_default();
             let mut g = chat.lock();
+            if let Some(h) = g.history.as_mut() { h.offset = std::fs::metadata(&h.path).map_or(h.offset, |m| m.len()) }
             g.pid = None;
             g.stdin = None;
             g.question = None;

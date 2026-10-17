@@ -383,7 +383,7 @@ private struct SessionRow: View {
         .onTapGesture { model.tap(session) }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint(session.hasPlan && model.chatFor(session) == nil ? "Opens this session’s plan" : model.chatFor(session) == nil ? "Shows this session's terminal" : "Opens this conversation")
+        .accessibilityHint(model.chatFor(session) != nil || session.transcriptPath != nil ? "Opens this conversation" : session.hasPlan ? "Opens this session’s plan" : "Shows this session's terminal")
         .contextMenu {
             if let c = model.chatFor(session) { Button("Delete chat") { model.confirmingDelete = c.id } }
         }
