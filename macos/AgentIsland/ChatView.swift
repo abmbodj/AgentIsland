@@ -951,7 +951,7 @@ private struct EditSummary: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Edited \(files.count) files, \(added) lines added, \(removed) removed")
+                .accessibilityLabel("Edited \(files.count) \(files.count == 1 ? "file" : "files"), \(added) lines added, \(removed) removed")
                 .accessibilityHint(open ? "Hides the file list" : "Shows the file list")
                 if open {
                     ScrollView {

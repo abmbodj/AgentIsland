@@ -59,7 +59,16 @@ fn read_capped(path: &str) -> String {
 pub fn preview(tool: &str, input: &Value) -> Option<DiffPreview> {
     let s = |v: &Value| v.as_str().unwrap_or_default().to_string();
     match tool {
-        "Edit" => Some(merge(vec![diff_pair(&s(&input["old_string"]), &s(&input["new_string"]))])),
+        "Edit" => {
+            let mut d = merge(vec![diff_pair(&s(&input["old_string"]), &s(&input["new_string"]))]);
+            if input["replace_all"] == true {
+                // One hunk shown, but every occurrence counted.
+                let old = s(&input["old_string"]);
+                let n = if old.is_empty() { 1 } else { read_capped(input["file_path"].as_str()?).matches(old.as_str()).count().max(1) };
+                (d.added, d.removed) = (d.added * n, d.removed * n);
+            }
+            Some(d)
+        }
         "MultiEdit" => Some(merge(
             input["edits"].as_array()?.iter().map(|e| diff_pair(&s(&e["old_string"]), &s(&e["new_string"]))).collect(),
         )),

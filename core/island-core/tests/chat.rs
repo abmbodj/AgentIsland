@@ -163,6 +163,26 @@ echo '{"type":"result","subtype":"success","is_error":false,"session_id":"s"}'"#
 }
 
 #[test]
+fn write_and_replace_all_rows_count_against_the_file_on_disk() {
+    let (tools, root) = fixture("diffdisk", &[]);
+    let f = root.join("f.txt");
+    std::fs::write(&f, "x\nx\nkeep\n").unwrap();
+    let f = f.to_str().unwrap();
+    let script = format!(r#"echo '{{"type":"system","subtype":"init","session_id":"s"}}'
+echo '{{"type":"assistant","message":{{"id":"m","content":[{{"type":"tool_use","id":"w","name":"Write","input":{{"file_path":"{f}","content":"keep"}}}},{{"type":"tool_use","id":"r","name":"Edit","input":{{"file_path":"{f}","old_string":"x","new_string":"y","replace_all":true}}}}]}}}}'
+echo '{{"type":"result","subtype":"success","is_error":false,"session_id":"s"}}'"#);
+    let bin = root.join("bin/claude");
+    std::fs::write(&bin, format!("#!/bin/sh\n{script}\n")).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let chats = Chats::default();
+    let id = chats.start(&tools, "claude", root.to_str().unwrap(), "w", vec![], Settings::default()).unwrap();
+    let t = wait_for(&chats, id, "idle");
+    let e = t["entries"].as_array().unwrap();
+    assert_eq!((e[1]["added"].as_u64(), e[1]["removed"].as_u64()), (Some(0), Some(2)));
+    assert_eq!((e[2]["added"].as_u64(), e[2]["removed"].as_u64()), (Some(2), Some(2)));
+}
+
+#[test]
 fn transcript_pull_returns_only_entries_changed_since_the_revision() {
     let (tools, root) = fixture("rev", &[("claude", CLAUDE)]);
     let chats = Chats::default();
