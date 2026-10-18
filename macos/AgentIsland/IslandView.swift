@@ -15,6 +15,18 @@ final class IslandView: NSView {
     private let fill = CAShapeLayer()
     private let pill = CALayer()
     let hosting: FirstMouseHostingView<PanelView>
+    private let contentClip = NSView()
+    private let contentMask = CAShapeLayer()
+    private lazy var motion = IslandMotion(fill: fill, mask: contentMask)
+    /// Conservative active-flight bounds, used until the current CA animation actually finishes.
+    var motionRect: CGRect {
+        guard motion.isAnimating else { return islandRect }
+        return islandRect.isEmpty ? motion.bounds : motion.bounds.union(islandRect)
+    }
+    var motionIsAnimating: Bool { motion.isAnimating }
+    var onMotionCompletion: (() -> Void)? {
+        didSet { motion.onCompletion = { [weak self] in self?.onMotionCompletion?() } }
+    }
 
     // Collapsed glyphs.
     private var dots: [String: CALayer] = [:]
@@ -76,8 +88,13 @@ final class IslandView: NSView {
         attentionDot.cornerRadius = dot / 2
         pill.addSublayer(attentionDot)
 
+        contentClip.wantsLayer = true
+        contentClip.layer?.mask = contentMask
+        addSubview(contentClip)
+        hosting.wantsLayer = true
         hosting.alphaValue = 0
-        addSubview(hosting)
+        hosting.layer?.setValue(6, forKeyPath: "transform.translation.y")
+        contentClip.addSubview(hosting)
         hosting.frame = CGRect(x: 0, y: -2000, width: PanelModel.listWidth, height: 2000)
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
@@ -98,6 +115,8 @@ final class IslandView: NSView {
     override func layout() {
         super.layout()
         shapeView.frame = CGRect(origin: .zero, size: envelope)
+        contentClip.frame = CGRect(origin: .zero, size: envelope)
+        contentMask.frame = CGRect(origin: .zero, size: envelope)
     }
 
     override func updateTrackingAreas() {
@@ -125,7 +144,6 @@ final class IslandView: NSView {
         let notchL = mid - notchWidth / 2, notchR = mid + notchWidth / 2
         let animate = animated && !Theme.reduceMotion
         let wasExpanded = self.expanded
-        let wasHidden = fill.opacity == 0
         self.expanded = expanded && visible
 
         // Collapsed wings.
@@ -140,81 +158,66 @@ final class IslandView: NSView {
         let (cl, cr): (CGFloat, CGFloat) = hasNotch ? (notchL - left, notchR + right) : (mid - (left + right) / 2, mid + (left + right) / 2)
 
         // Target silhouette.
-        let path: CGPath?
+        let shape: IslandShape
         let hidden = !self.expanded && sessions.isEmpty
         if self.expanded {
-            let w = panelWidth
+            let w = min(panelWidth, envelope.width - (hasNotch ? 2 * ear : 0))
             let measured = model.contentHeight > 0 ? model.contentHeight : hosting.fittingSize.height
-            let contentH = min(measured, H - notchHeight)
+            let contentH = max(0, min(measured, H - notchHeight))
             let rect = CGRect(x: mid - w / 2, y: H - notchHeight - contentH, width: w, height: notchHeight + contentH)
             islandRect = rect.insetBy(dx: hasNotch ? -ear : 0, dy: 0)
             hosting.frame = CGRect(x: rect.minX, y: rect.minY - 2000 + contentH, width: w, height: 2000)
-            path = islandPath(x0: rect.minX, x1: rect.maxX, bottom: rect.minY, radius: 20)
+            shape = islandShape(x0: rect.minX, x1: rect.maxX, bottom: rect.minY, radius: 20)
         } else if sessions.isEmpty {
             // Invisible: the hardware notch alone (still hoverable on notched displays).
             islandRect = hasNotch ? CGRect(x: notchL, y: H - notchHeight, width: notchWidth, height: notchHeight) : .zero
             // Notch-sized but hidden, so opening grows out of the notch instead of popping in.
-            path = islandPath(x0: notchL, x1: notchR, bottom: H - notchHeight, radius: min(10, notchHeight / 3))
+            shape = islandShape(x0: hasNotch ? notchL : mid - 1, x1: hasNotch ? notchR : mid + 1, bottom: H - notchHeight, radius: min(10, notchHeight / 3))
         } else {
             islandRect = CGRect(x: cl - (hasNotch ? ear : 0), y: H - notchHeight, width: cr - cl + (hasNotch ? 2 * ear : 0), height: notchHeight)
-            path = islandPath(x0: cl, x1: cr, bottom: H - notchHeight, radius: min(10, notchHeight / 3))
+            shape = islandShape(x0: cl, x1: cr, bottom: H - notchHeight, radius: min(10, notchHeight / 3))
         }
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let from = fill.presentation()?.path ?? fill.path
-        for l in [fill] {
-            l.path = path
-            l.opacity = hidden ? 0 : 1
-            if animate, hidden, !wasHidden {
-                // Fade only after the shrink lands on the notch.
-                let f = CABasicAnimation(keyPath: "opacity")
-                f.fromValue = 1
-                f.toValue = 0
-                f.beginTime = CACurrentMediaTime() + 0.2
-                f.duration = 0.1
-                f.fillMode = .backwards
-                l.add(f, forKey: "fade")
-            } else if !hidden {
-                l.removeAnimation(forKey: "fade")
-            }
-            if animate, let from, let path {
-                let a = CASpringAnimation(keyPath: "path")
-                a.fromValue = from
-                a.toValue = path
-                a.mass = 1
-                a.stiffness = 300
-                a.damping = 2 * sqrt(300) // critically damped: quick, no bounce
-                a.duration = a.settlingDuration
-                l.add(a, forKey: "path")
-            }
-        }
+        motion.set(shape, in: envelope, animated: animate)
+        fade(fill, to: hidden ? 0 : 1, duration: animate ? Motion.reducedDuration : (Theme.reduceMotion && animated ? Motion.reducedDuration : 0),
+             delay: animate && hidden && motion.isAnimating ? IslandTrajectory.duration - Motion.reducedDuration : 0)
         layoutPill(shown: shown, extra: extra, attention: attention, leftEdge: cl, notchR: notchR, H: H)
-        CATransaction.commit()
 
-        // Cross-fades between the collapsed pill and the panel.
+        // Keep content clipped by the same moving silhouette on both opening and closing.
+        // Reversals start at the presentation values, never at a hard-coded entrance offset.
         if self.expanded != wasExpanded || !animated {
             let opening = self.expanded
             model.isOpen = opening
-            NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = animate ? (opening ? 0.22 : 0.14) : 0
-                ctx.allowsImplicitAnimation = true
-                hosting.animator().alphaValue = opening ? 1 : 0
-            })
-            if opening && animate, let l = hosting.layer {
-                // Content settles down into the growing island (ease-out-quint); fade only under Reduce Motion.
-                let a = CABasicAnimation(keyPath: "transform.translation.y")
-                a.fromValue = 6
-                a.toValue = 0
-                a.duration = 0.22
-                a.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
-                l.add(a, forKey: "settle")
+            if let layer = hosting.layer {
+                let opacity = layer.presentation()?.opacity ?? layer.opacity
+                let translation = layer.presentation()?.value(forKeyPath: "transform.translation.y") as? CGFloat
+                    ?? layer.value(forKeyPath: "transform.translation.y") as? CGFloat ?? 0
+                layer.removeAnimation(forKey: "island.content.opacity")
+                layer.removeAnimation(forKey: "island.content.translation")
+                hosting.alphaValue = opening ? 1 : 0
+                layer.setValue(animate ? (opening ? 0 : 6) : 0, forKeyPath: "transform.translation.y")
+                let duration = animate ? (opening ? Motion.detailDuration : Motion.feedbackDuration) : (Theme.reduceMotion && animated ? Motion.reducedDuration : 0)
+                if duration > 0 {
+                    let opacityAnimation = CABasicAnimation(keyPath: "opacity")
+                    opacityAnimation.fromValue = opacity
+                    opacityAnimation.toValue = opening ? 1 : 0
+                    opacityAnimation.duration = duration
+                    layer.add(opacityAnimation, forKey: "island.content.opacity")
+                    if animate {
+                        let translationAnimation = CABasicAnimation(keyPath: "transform.translation.y")
+                        translationAnimation.fromValue = translation
+                        translationAnimation.toValue = opening ? 0 : 6
+                        translationAnimation.duration = duration
+                        translationAnimation.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
+                        layer.add(translationAnimation, forKey: "island.content.translation")
+                    }
+                }
             }
-            CATransaction.begin()
-            CATransaction.setAnimationDuration(animate ? 0.16 : 0)
-            pill.opacity = opening ? 0 : 1
-            CATransaction.commit()
+            fade(pill, to: opening ? 0 : 1, duration: animate ? Motion.feedbackDuration : (Theme.reduceMotion && animated ? Motion.reducedDuration : 0))
         }
+        CATransaction.commit()
         setAccessibilityLabel(Self.describe(sessions, attention: attention))
     }
 
@@ -254,28 +257,28 @@ final class IslandView: NSView {
         attentionCount.frame = CGRect(x: ax + dot + 4, y: y + (notchHeight - 14) / 2, width: 40, height: 14)
     }
 
-    /// Square top flush with the screen edge, rounded bottom, concave ears into the menu bar
-    /// on notched displays; a capsule in the menu bar strip elsewhere (collapsed only).
-    private func islandPath(x0: CGFloat, x1: CGFloat, bottom y0: CGFloat, radius r: CGFloat) -> CGPath {
-        let top = envelope.height
-        let p = CGMutablePath()
-        if hasNotch || expanded {
-            let e = hasNotch ? ear : 0
-            p.move(to: CGPoint(x: x0 - e, y: top))
-            p.addQuadCurve(to: CGPoint(x: x0, y: top - e), control: CGPoint(x: x0, y: top))
-            p.addLine(to: CGPoint(x: x0, y: y0 + r))
-            p.addQuadCurve(to: CGPoint(x: x0 + r, y: y0), control: CGPoint(x: x0, y: y0))
-            p.addLine(to: CGPoint(x: x1 - r, y: y0))
-            p.addQuadCurve(to: CGPoint(x: x1, y: y0 + r), control: CGPoint(x: x1, y: y0))
-            p.addLine(to: CGPoint(x: x1, y: top - e))
-            p.addQuadCurve(to: CGPoint(x: x1 + e, y: top), control: CGPoint(x: x1, y: top))
-            p.closeSubpath()
-        } else {
-            let inset: CGFloat = 3
-            let rect = CGRect(x: x0, y: y0 + inset, width: x1 - x0, height: top - y0 - inset * 2)
-            p.addRoundedRect(in: rect, cornerWidth: rect.height / 2, cornerHeight: rect.height / 2)
-        }
-        return p
+    private func islandShape(x0: CGFloat, x1: CGFloat, bottom: CGFloat, radius: CGFloat) -> IslandShape {
+        let capsule = !hasNotch && !expanded
+        let inset: CGFloat = capsule ? 3 : 0
+        let r = capsule ? max(0, (notchHeight - 6) / 2) : radius
+        return IslandShape(left: x0, right: x1, bottom: bottom + inset, radius: r,
+                           shoulder: hasNotch ? ear : (capsule ? -r : 0), top: envelope.height - inset)
+    }
+
+    private func fade(_ layer: CALayer, to target: Float, duration: Double, delay: Double = 0) {
+        let key = "island.opacity"
+        guard duration == 0 || layer.opacity != target else { return }
+        let from = layer.presentation()?.opacity ?? layer.opacity
+        layer.removeAnimation(forKey: key)
+        layer.opacity = target
+        guard duration > 0, from != target else { return }
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.fromValue = from
+        animation.toValue = target
+        animation.beginTime = CACurrentMediaTime() + delay
+        animation.duration = duration
+        animation.fillMode = .backwards
+        layer.add(animation, forKey: key)
     }
 
     private static func countWidth(_ n: Int) -> CGFloat {

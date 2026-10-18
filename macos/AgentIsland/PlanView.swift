@@ -124,6 +124,7 @@ struct PlanReader: View {
 }
 
 struct PlanActions: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: PanelModel
     let plan: ChatPlan
     var historical: Bool
@@ -139,7 +140,7 @@ struct PlanActions: View {
                         .accessibilityLabel("Revision feedback")
                         .onTapGesture { model.onSummon() }
                     HStack {
-                        Button("Cancel") { model.editingPlan = false }.disabled(model.sendingPlan)
+                        Button("Cancel") { withAnimation(Motion.detail(reduceMotion: reduceMotion)) { model.editingPlan = false } }.disabled(model.sendingPlan)
                         Spacer()
                         Button(model.sendingPlan ? "Sending…" : "Send feedback") { model.decidePlan(plan, action: "revise") }
                             .disabled(disabled || model.planFeedback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -147,12 +148,13 @@ struct PlanActions: View {
                 } else {
                     HStack {
                         Button("Reject plan") { model.decidePlan(plan, action: "reject") }
-                        Button("Revise plan") { model.editingPlan = true; model.onSummon() }
+                        Button("Revise plan") { withAnimation(Motion.detail(reduceMotion: reduceMotion)) { model.editingPlan = true }; model.onSummon() }
                         Spacer()
                         Button(model.sendingPlan ? "Sending…" : "Implement plan") { model.decidePlan(plan, action: "implement") }.buttonStyle(.borderedProminent).tint(Color(nsColor: Theme.ink)).foregroundStyle(Color.black)
                     }.disabled(disabled)
                 }
             } else if plan.status != "writing" { Text(plan.status.capitalized).font(.system(size: 12)) }
         }.buttonStyle(.borderless).font(.system(size: 12)).foregroundStyle(Color(nsColor: Theme.ink))
+            .staticDetailWhenReduced()
     }
 }

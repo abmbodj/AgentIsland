@@ -26,15 +26,48 @@ enum Theme {
     static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 }
 
-/// Motion tokens: ease-out-quint, never bounce. Reduce Motion swaps slides for short cross-fades.
+/// Restrained, shared timings. Native shell code can use the durations directly.
 enum Motion {
-    /// Moving between the list, the new-chat screen and a conversation.
-    static var screen: Animation {
-        Theme.reduceMotion ? .easeOut(duration: 0.12) : .timingCurve(0.22, 1, 0.36, 1, duration: 0.34)
+    static let feedbackDuration = 0.12
+    static let detailDuration = 0.22
+    static let navigationDuration = 0.25
+    static let reducedDuration = 0.1
+
+    static func feedback(reduceMotion: Bool) -> Animation {
+        .easeOut(duration: reduceMotion ? reducedDuration : feedbackDuration)
     }
-    /// Small state changes: a row appearing, a detail opening, a button swapping its glyph.
-    static var quick: Animation {
-        Theme.reduceMotion ? .easeOut(duration: 0.1) : .timingCurve(0.22, 1, 0.36, 1, duration: 0.22)
+    static func detail(reduceMotion: Bool) -> Animation? {
+        // Disclosures change layout; a short ease still moves surrounding content.
+        reduceMotion ? nil : .timingCurve(0.22, 1, 0.36, 1, duration: detailDuration)
+    }
+    static func navigation(reduceMotion: Bool) -> Animation {
+        reduceMotion ? .easeOut(duration: feedbackDuration) : .timingCurve(0.22, 1, 0.36, 1, duration: navigationDuration)
+    }
+    static var screen: Animation { navigation(reduceMotion: Theme.reduceMotion) }
+    static var quick: Animation? { detail(reduceMotion: Theme.reduceMotion) }
+}
+
+/// Countdown presentation derives from the response's original deadline, including after a remount.
+/// This never schedules the response itself; PanelModel owns that deadline.
+struct CountdownTiming {
+    let remaining: TimeInterval
+    let fraction: Double
+
+    init(started: Date, duration: TimeInterval, now: Date) {
+        let window = max(0, duration)
+        remaining = max(0, min(window, window - now.timeIntervalSince(started)))
+        fraction = window > 0 ? remaining / window : 0
+    }
+}
+
+/// AppKit coordinates point upward. Build the clockwise arc explicitly so its origin stays at noon.
+enum CountdownRingGeometry {
+    static func path(in bounds: CGRect, lineWidth: CGFloat) -> CGPath {
+        let path = CGMutablePath()
+        path.addArc(center: CGPoint(x: bounds.midX, y: bounds.midY),
+                    radius: max(0, (min(bounds.width, bounds.height) - lineWidth) / 2),
+                    startAngle: .pi / 2, endAngle: -3 * .pi / 2, clockwise: true)
+        return path
     }
 }
 
@@ -46,8 +79,8 @@ private struct Shift: ViewModifier {
 
 extension AnyTransition {
     /// A screen pushed in from the trailing side (forward) or leading side (back); the old one drifts away the other way.
-    static func screen(forward: Bool) -> AnyTransition {
-        if Theme.reduceMotion { return .opacity }
+    static func screen(forward: Bool, reduceMotion: Bool = Theme.reduceMotion) -> AnyTransition {
+        if reduceMotion { return .opacity }
         let d: CGFloat = 28
         return .asymmetric(
             insertion: .modifier(active: Shift(dx: forward ? d : -d, opacity: 0), identity: Shift(dx: 0, opacity: 1)),
@@ -56,7 +89,28 @@ extension AnyTransition {
     }
 
     /// A message or banner settling into the column.
-    static var rise: AnyTransition {
-        Theme.reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 6))
+    static func rise(reduceMotion: Bool) -> AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 6))
     }
+}
+
+/// A disclosure can alter surrounding layout, so Reduced Motion uses its final state immediately.
+/// This also suppresses inherited animation transactions when the preference changes mid-disclosure.
+private struct StaticReducedDetail: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .transaction { transaction in
+                if reduceMotion {
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
+                }
+            }
+            .animation(nil, value: reduceMotion)
+    }
+}
+
+extension View {
+    func staticDetailWhenReduced() -> some View { modifier(StaticReducedDetail()) }
 }

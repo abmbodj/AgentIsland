@@ -5,8 +5,6 @@ private let secondary = Color(nsColor: Theme.secondary)
 private let muted = Color(nsColor: Theme.muted)
 private let amber = Color(nsColor: Theme.amber)
 
-private var easing: Animation? { Motion.quick }
-
 // MARK: - Composer
 
 /// Multi-line input: Return sends, Shift+Return inserts a newline. Clicking it asks the controller for
@@ -126,6 +124,7 @@ struct ComposerField: NSViewRepresentable {
 }
 
 struct Composer: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     enum Mode { case new, reply }
     @ObservedObject var model: PanelModel
     let mode: Mode
@@ -187,8 +186,8 @@ struct Composer: View {
                 .buttonStyle(.plain)
                 .disabled(!running && blank)
                 .padding(.bottom, 2)
-                .animation(Motion.quick, value: running)
-                .animation(Motion.quick, value: blank)
+                .animation(Motion.feedback(reduceMotion: reduceMotion), value: running)
+                .animation(Motion.feedback(reduceMotion: reduceMotion), value: blank)
                 .accessibilityLabel(running ? "Stop" : (mode == .new ? "Start session" : "Send message"))
                 .help(running ? "Stop this turn" : "Send (Return)")
             }
@@ -298,22 +297,14 @@ struct Composer: View {
 private let ultracodeViolet = Color(nsColor: Theme.ultracode)
 
 /// One composer-row chip: secondary ink at rest, a faint lift on hover (DESIGN.md: 6-8% white lifts).
-/// With Ultracode on, the chip takes Claude Code's own violet and slowly breathes; Reduce Motion holds it still.
+/// Ultracode stays identifiable through its violet tint and sparkle icon without decorative breathing.
 private struct Chip: View {
     var icon: String?
     let text: String
     var menu = true
     var ultracode = false
     @State private var hover = false
-    @State private var breathe = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    /// The Ultracode tint; hover is its own layer so it never retargets the breath.
-    private var fill: Color { ultracode ? ultracodeViolet.opacity(breathe ? 0.22 : 0.12) : .clear }
-    /// The breath animates only the fill and hairline, never layout, so it can't catch the panel's own resize.
-    private var breath: Animation {
-        breathe ? .easeInOut(duration: 1.8).repeatForever(autoreverses: true) : Motion.quick
-    }
 
     var body: some View {
         HStack(spacing: 4) {
@@ -326,13 +317,11 @@ private struct Chip: View {
         .padding(.horizontal, 6)
         .frame(height: 22)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(hover ? 0.08 : 0)))
-        .background(RoundedRectangle(cornerRadius: 6).fill(fill).animation(breath, value: breathe))
+        .background(RoundedRectangle(cornerRadius: 6).fill(ultracodeViolet.opacity(ultracode ? 0.16 : 0)))
         .overlay(RoundedRectangle(cornerRadius: 6)
-            .strokeBorder(ultracodeViolet.opacity(ultracode ? (breathe ? 0.45 : 0.2) : 0), lineWidth: 1)
-            .animation(breath, value: breathe))
+            .strokeBorder(ultracodeViolet.opacity(ultracode ? 0.3 : 0), lineWidth: 1))
         .contentShape(Rectangle())
-        .onHover { h in withAnimation(Motion.quick) { hover = h } }
-        .onChange(of: ultracode && !reduceMotion, initial: true) { _, on in breathe = on }
+        .onHover { h in withAnimation(Motion.feedback(reduceMotion: reduceMotion)) { hover = h } }
     }
 }
 
@@ -436,6 +425,7 @@ private struct BottomKey: PreferenceKey {
 }
 
 struct ChatView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: PanelModel
     @State private var follow = true
     @State private var viewport: CGFloat = 0
@@ -577,14 +567,14 @@ struct ChatView: View {
                         if e.kind == "plan", let plan = model.plans.first(where: { $0.entryIndex == e.index }) {
                             InlinePlan(model: model, plan: plan)
                         } else {
-                            EntryView(entry: e, needsApproval: needsApproval, signIn: e.status == "signedOut" && e.index == model.entries.last?.index && model.chatStatus != "running" ? model.signIn : nil).transition(.rise)
+                            EntryView(entry: e, needsApproval: needsApproval, signIn: e.status == "signedOut" && e.index == model.entries.last?.index && model.chatStatus != "running" ? model.signIn : nil).transition(.rise(reduceMotion: reduceMotion))
                         }
                     }
                     if let approval = model.chatApproval {
                         ChatPermissionCard(model: model, approval: approval)
                     }
                     if let q = model.chatQuestion {
-                        QuestionCard(model: model, questions: q).transition(.rise)
+                        QuestionCard(model: model, questions: q).transition(.rise(reduceMotion: reduceMotion))
                     } else if model.working && !model.disconnected {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.mini)
@@ -592,7 +582,7 @@ struct ChatView: View {
                         }
                         .accessibilityElement(children: .combine)
                     }
-                    banner.transition(.rise)
+                    banner.transition(.rise(reduceMotion: reduceMotion))
                     Color.clear.frame(height: 1).id("bottom")
                         .background(GeometryReader { g in Color.clear.preference(key: BottomKey.self, value: g.frame(in: .named("chat")).minY) })
                 }
@@ -601,16 +591,21 @@ struct ChatView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 12)
                 // Only appends animate; text growing inside the last message is not a count change.
-                .animation(Motion.quick, value: model.entries.count)
-                .animation(Motion.quick, value: model.chatStatus)
+                .animation(Motion.detail(reduceMotion: reduceMotion), value: model.entries.count)
+                .animation(Motion.detail(reduceMotion: reduceMotion), value: model.chatStatus)
+                .staticDetailWhenReduced()
             }
             .coordinateSpace(name: "chat")
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewport = $0 }
             .onPreferenceChange(BottomKey.self) { y in if y <= viewport + 40 { follow = true } }
             .onChange(of: model.entries) { scrollToEnd(proxy) }
             .onChange(of: model.chatStatus) { scrollToEnd(proxy) }
+            .onChange(of: reduceMotion) { _, reduced in
+                // Retarget an in-flight Latest scroll immediately when motion is disabled.
+                if reduced { scrollToEnd(proxy) }
+            }
             .onAppear {
-                scrollToEnd(proxy, animated: false)
+                scrollToEnd(proxy)
                 // Scrolling up means "let me read": stop following until the bottom is reached again.
                 wheel = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { e in
                     if e.scrollingDeltaY > 0 { follow = false }
@@ -622,7 +617,7 @@ struct ChatView: View {
                 if !follow {
                     Button {
                         follow = true
-                        scrollToEnd(proxy)
+                        scrollToEnd(proxy, animated: true)
                     } label: {
                         Label("Latest", systemImage: "arrow.down")
                             .font(.system(size: 11, weight: .medium))
@@ -633,20 +628,24 @@ struct ChatView: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, 8)
-                    .transition(Theme.reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.94)))
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.94)))
                     .accessibilityLabel("Scroll to latest message")
                 }
             }
-            .animation(Motion.quick, value: follow)
+            .animation(Motion.feedback(reduceMotion: reduceMotion), value: follow)
+            .animation(nil, value: reduceMotion)
         }
     }
 
-    private func scrollToEnd(_ proxy: ScrollViewProxy, animated: Bool = true) {
+    private func scrollToEnd(_ proxy: ScrollViewProxy, animated: Bool = false) {
         guard follow else { return }
-        if animated, let a = easing {
-            withAnimation(a) { proxy.scrollTo("bottom", anchor: .bottom) }
+        // Stream updates follow immediately. Only an explicit Latest click animates the viewport.
+        if animated && !reduceMotion {
+            withAnimation(Motion.detail(reduceMotion: false)) { proxy.scrollTo("bottom", anchor: .bottom) }
         } else {
-            proxy.scrollTo("bottom", anchor: .bottom)
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { proxy.scrollTo("bottom", anchor: .bottom) }
         }
     }
 
@@ -953,6 +952,7 @@ private struct CodeBlock: View {
 
 /// "Edited 2 files +23 −1": every file the chat changed, totalled; opens to a per-file list.
 private struct EditSummary: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let entries: [ChatEntry]
     @State private var open = false
 
@@ -975,13 +975,14 @@ private struct EditSummary: View {
         if !files.isEmpty {
             let added = files.reduce(0) { $0 + $1.added }, removed = files.reduce(0) { $0 + $1.removed }
             VStack(alignment: .leading, spacing: 4) {
-                Button { withAnimation(easing) { open.toggle() } } label: {
+                Button { withAnimation(Motion.detail(reduceMotion: reduceMotion)) { open.toggle() } } label: {
                     HStack(spacing: 6) {
                         Text("Edited \(files.count) \(files.count == 1 ? "file" : "files")").foregroundStyle(secondary)
                         counts(added, removed)
-                        Image(systemName: "chevron.right")
+                        Image(systemName: reduceMotion && open ? "chevron.down" : "chevron.right")
                             .font(.system(size: 9, weight: .semibold))
-                            .rotationEffect(.degrees(open ? 90 : 0))
+                            .rotationEffect(.degrees(open && !reduceMotion ? 90 : 0))
+                            .animation(nil, value: reduceMotion)
                             .foregroundStyle(muted)
                         Spacer(minLength: 0)
                     }
@@ -1029,6 +1030,7 @@ private struct EditSummary: View {
 }
 
 private struct ToolRow: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let entry: ChatEntry
     let needsApproval: Bool
     @State private var open = false
@@ -1038,12 +1040,13 @@ private struct ToolRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
-                withAnimation(easing) { open.toggle() }
+                withAnimation(Motion.detail(reduceMotion: reduceMotion)) { open.toggle() }
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: "chevron.right")
+                    Image(systemName: reduceMotion && open ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
-                        .rotationEffect(.degrees(open ? 90 : 0))
+                        .rotationEffect(.degrees(open && !reduceMotion ? 90 : 0))
+                        .animation(nil, value: reduceMotion)
                         .foregroundStyle(muted)
                         .frame(width: 10)
                     Text(entry.name.isEmpty ? "Tool" : entry.name)
@@ -1184,6 +1187,7 @@ struct NewChatView: View {
 
 /// Inline confirmation in place of the row or header: no modal, nothing destructive on a single click.
 struct DeleteConfirm: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let chat: ChatInfo
     @ObservedObject var model: PanelModel
 
@@ -1195,7 +1199,7 @@ struct DeleteConfirm: View {
                     .font(.system(size: 11)).foregroundStyle(secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
-            Button { withAnimation(Motion.quick) { model.confirmingDelete = nil } } label: {
+            Button { withAnimation(Motion.feedback(reduceMotion: reduceMotion)) { model.confirmingDelete = nil } } label: {
                 Text("Cancel").font(.system(size: 12)).foregroundStyle(secondary).padding(.horizontal, 10).frame(height: 26).contentShape(Rectangle())
             }
             .buttonStyle(IslandButtonStyle(radius: 6))
@@ -1219,6 +1223,7 @@ struct DeleteConfirm: View {
 
 /// A chat the agent's hooks haven't reported as a session (yet): same row, driven by the chat's own status.
 struct ChatRow: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let chat: ChatInfo
     @ObservedObject var model: PanelModel
     @State private var hover = false
@@ -1252,7 +1257,7 @@ struct ChatRow: View {
             }
             .buttonStyle(IslandButtonStyle(radius: 6))
             .opacity(hover ? 1 : 0)
-            .animation(Motion.quick, value: hover)
+            .animation(Motion.feedback(reduceMotion: reduceMotion), value: hover)
             .accessibilityHidden(true) // offered as an action on the row instead
             .help("Delete this chat")
         }
