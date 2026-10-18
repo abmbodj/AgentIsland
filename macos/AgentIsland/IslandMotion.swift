@@ -10,6 +10,44 @@ struct IslandShape: Equatable {
     }
     init(values: [Double]) { self.values = values }
 
+    /// Recover the rendered scalar geometry from our fixed path topology. CA interpolates
+    /// between sampled paths, so its presentation position can differ from the analytic one.
+    init?(path: CGPath, in envelope: CGSize) {
+        let rendered = Self.elements(of: path)
+        guard rendered.types == [.moveToPoint, .addQuadCurveToPoint, .addLineToPoint,
+                                  .addQuadCurveToPoint, .addLineToPoint, .addQuadCurveToPoint,
+                                  .addLineToPoint, .addQuadCurveToPoint, .closeSubpath],
+              rendered.points.count == 12 else { return nil }
+        let p = rendered.points
+        let shape = IslandShape(left: p[1].x, right: p[10].x, bottom: p[4].y,
+                                radius: p[5].x - p[1].x, shoulder: p[1].x - p[0].x, top: p[0].y)
+        guard shape.values.allSatisfy({ $0.isFinite }) else { return nil }
+        let recovered = Self.elements(of: shape.path(in: envelope))
+        // Reject unsupported or malformed paths instead of approximating a visible shape.
+        guard zip(rendered.points, recovered.points).allSatisfy({ a, b in
+            a.x.isFinite && a.y.isFinite && abs(a.x - b.x) < 0.00001 && abs(a.y - b.y) < 0.00001
+        }) else { return nil }
+        self = shape
+    }
+
+    private static func elements(of path: CGPath) -> (types: [CGPathElementType], points: [CGPoint]) {
+        var types: [CGPathElementType] = [], points: [CGPoint] = []
+        path.applyWithBlock { element in
+            let type = element.pointee.type
+            types.append(type)
+            let count: Int
+            switch type {
+            case .moveToPoint, .addLineToPoint: count = 1
+            case .addQuadCurveToPoint: count = 2
+            case .addCurveToPoint: count = 3
+            case .closeSubpath: count = 0
+            @unknown default: count = 0
+            }
+            for i in 0..<count { points.append(element.pointee.points[i]) }
+        }
+        return (types, points)
+    }
+
     func path(in envelope: CGSize) -> CGPath {
         let l = max(0, min(CGFloat(values[0]), envelope.width - 1))
         let r = max(l + 1, min(CGFloat(values[1]), envelope.width))
@@ -61,11 +99,12 @@ final class IslandTrajectory {
     }
 
     @discardableResult
-    func retarget(_ shape: IslandShape, at time: Double, animated: Bool, reconfigure: Bool = false) -> Bool {
+    func retarget(_ shape: IslandShape, at time: Double, animated: Bool, reconfigure: Bool = false,
+                  visibleStart: IslandShape? = nil) -> Bool {
         guard reconfigure || shape != target || (!animated && isAnimating) else { return false }
         let current = sample(at: time)
         generation += 1
-        start = current.position
+        start = visibleStart?.values ?? current.position
         velocity = current.velocity
         target = shape
         began = time
@@ -121,6 +160,15 @@ final class IslandMotion: NSObject, CAAnimationDelegate {
 
     init(fill: CAShapeLayer, mask: CAShapeLayer) { self.fill = fill; self.mask = mask }
 
+    /// Keep window layout monotonic while CA owns an active flight. Reversals can need a
+    /// smaller swept region, but shrinking now forces AppKit/SwiftUI layout on every input.
+    static func windowBounds(current: CGRect, required: CGRect, animating: Bool) -> CGRect {
+        if animating && !current.isEmpty {
+            return required.isEmpty ? current : current.union(required).integral
+        }
+        return required.isEmpty ? .zero : required.integral
+    }
+
     func set(_ shape: IslandShape, in envelope: CGSize, animated: Bool) {
         let time = CACurrentMediaTime()
         let reconfigure = self.envelope != envelope
@@ -135,7 +183,11 @@ final class IslandMotion: NSObject, CAAnimationDelegate {
             bounds = fill.path!.boundingBoxOfPath
             return
         }
-        guard let trajectory, trajectory.retarget(shape, at: time, animated: animate, reconfigure: reconfigure) else { return }
+        guard let trajectory,
+              reconfigure || shape != trajectory.target || (!animate && trajectory.isAnimating) else { return }
+        let visibleStart = animate && trajectory.isAnimating
+            ? fill.presentation()?.path.flatMap { IslandShape(path: $0, in: envelope) } : nil
+        trajectory.retarget(shape, at: time, animated: animate, reconfigure: reconfigure, visibleStart: visibleStart)
         let generation = trajectory.generation
         // Replace after invalidating the old generation: CA can call animationDidStop on removal.
         fill.removeAnimation(forKey: "island.path")

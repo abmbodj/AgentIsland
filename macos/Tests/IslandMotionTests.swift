@@ -40,6 +40,39 @@ struct IslandMotionTests {
         }
         let rapid = IslandTrajectory(initial: a)
         let envelope = CGSize(width: 620, height: 492)
+        // CA linearly interpolates keyframe paths. Its visible midpoint differs from
+        // the analytic trajectory during initial acceleration; reversal must use that path.
+        let visibleFlight = IslandTrajectory(initial: a)
+        assert(visibleFlight.retarget(b, at: 40, animated: true))
+        let step = IslandTrajectory.duration / 72
+        let firstFrame = visibleFlight.sample(at: 40).position
+        let secondFrame = visibleFlight.sample(at: 40 + step).position
+        let visibleShape = IslandShape(values: zip(firstFrame, secondFrame).map { ($0 + $1) / 2 })
+        let visiblePath = visibleShape.path(in: envelope)
+        let recovered = IslandShape(path: visiblePath, in: envelope)!
+        let analyticMidpoint = visibleFlight.sample(at: 40 + step / 2)
+        assert(abs(analyticMidpoint.position[2] - recovered.values[2]) > 1,
+               "Fixture must exercise visible linear-keyframe error above one point")
+        assert(visibleFlight.retarget(a, at: 40 + step / 2, animated: true, visibleStart: recovered))
+        let resumedVisible = visibleFlight.sample(at: 40 + step / 2)
+        for i in recovered.values.indices {
+            assert(abs(resumedVisible.position[i] - recovered.values[i]) < 0.000001,
+                   "Reversal must start at visible presentation position")
+            assert(abs(resumedVisible.velocity[i] - analyticMidpoint.velocity[i]) < 0.000001,
+                   "Recovering presentation geometry must retain analytic velocity")
+        }
+        let visibleGeneration = visibleFlight.generation
+        assert(!visibleFlight.retarget(a, at: 40 + step, animated: true, visibleStart: b))
+        assert(visibleFlight.generation == visibleGeneration, "Presentation sampling must not restart unchanged targets")
+        for shape in [a, b, capsule] {
+            let decoded = IslandShape(path: shape.path(in: envelope), in: envelope)!
+            for i in shape.values.indices {
+                assert(abs(decoded.values[i] - shape.values[i]) < 0.000001,
+                       "Path recovery must handle notch, panel, and capsule topology")
+            }
+        }
+        assert(IslandShape(path: CGPath(rect: CGRect(x: 1, y: 1, width: 10, height: 10), transform: nil),
+                           in: envelope) == nil, "Unrecognized presentation paths must fall back safely")
         var observedMomentumPastEndpoints = false
         for turn in 0..<24 {
             let time = 30 + Double(turn) * 0.075
@@ -102,6 +135,17 @@ struct IslandMotionTests {
         assert(completions == 1 && coordinator.isAnimating, "Old envelope generations must not match new flights")
         assert((layer.animation(forKey: "island.path") as! CAKeyframeAnimation).values!.count <= 73,
                "A 600ms flight needs at most 73 samples for 120Hz interpolation")
+        let firstFlight = CGRect(x: 100, y: 50, width: 440, height: 442)
+        let reversedFlight = CGRect(x: 180, y: 220, width: 260, height: 272)
+        let retained = IslandMotion.windowBounds(current: firstFlight, required: reversedFlight, animating: true)
+        assert(retained == firstFlight, "A rapid reversal must not resize the window smaller during its flight")
+        let widerFlight = CGRect(x: 60, y: 150, width: 520, height: 342)
+        let grown = IslandMotion.windowBounds(current: retained, required: widerFlight, animating: true)
+        assert(grown.contains(firstFlight) && grown.contains(widerFlight), "A new flight may only grow the active envelope")
+        assert(IslandMotion.windowBounds(current: grown, required: reversedFlight, animating: false) == reversedFlight,
+               "Only settled current-generation geometry may shrink the window")
+        assert(IslandMotion.windowBounds(current: grown, required: .zero, animating: true) == grown)
+        assert(IslandMotion.windowBounds(current: grown, required: .zero, animating: false).isEmpty)
         print("Island motion continuity, topology, bounds, unchanged target, envelope and cancellation checks passed")
     }
 }

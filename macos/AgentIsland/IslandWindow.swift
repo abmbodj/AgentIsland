@@ -487,19 +487,19 @@ final class IslandController {
     /// Cover all scalar extrema of the current flight, including momentum after a reversal.
     /// Only the coordinator's current-generation completion can shrink to the final silhouette.
     private func fitWindow(to target: CGRect) {
-        guard !target.isEmpty else {
+        let r = IslandMotion.windowBounds(current: windowRect, required: target, animating: view.motionIsAnimating)
+        guard !r.isEmpty else {
             panel.orderOut(nil)
             windowRect = .zero
             return
         }
-        let r = target.integral
         if r != windowRect {
             windowRect = r
             panel.setFrame(r.offsetBy(dx: envelopeOrigin.x, dy: envelopeOrigin.y), display: false)
             view.setBoundsOrigin(r.origin)
             view.needsLayout = true
         }
-        panel.orderFrontRegardless()
+        if !panel.isVisible { panel.orderFrontRegardless() }
     }
 
     private func render(animated: Bool) {

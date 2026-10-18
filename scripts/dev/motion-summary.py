@@ -2,8 +2,9 @@
 """Summarize exported Instruments tables without publishing trace environments.
 
 Export with xctrace export --input run.trace --xpath
-'/trace-toc/run[@number="1"]/data/table[@schema="hitches" or @schema="hitches-updates" or @schema="hitches-renders" or @schema="time-profile"]'
+'/trace-toc/run[@number="1"]/data/table[@schema="hitches"]'
 --output tables.xml; then run this script on tables.xml.
+Export each schema separately: multi-table xctrace exports can omit schemas.
 Frame lifetime includes pipeline latency and is NOT a frame budget measurement.
 """
 import argparse, collections, json, xml.etree.ElementTree as E
@@ -24,7 +25,8 @@ def main():
     result={}
     for node in root.findall('node'):
         schema=node.find('schema')
-        if schema is None:continue
+        if schema is None:
+            raise SystemExit("Missing schema: export one table per XML file so every table is identified.")
         name=schema.attrib['name'];cols=[c.findtext('mnemonic') for c in schema.findall('col')]
         rows=[{k:v for k,v in zip(cols,list(row))} for row in node.findall('row')]
         item={'rows':len(rows),'columns':cols}
@@ -37,14 +39,18 @@ def main():
         if name=='time-profile':
             stacks=collections.Counter()
             for r in rows:
+                sample_frames=set()
                 for k,v in r.items():
                     if 'backtrace'in k or 'stack'in k:
                         e=resolve(v)
                         for frame in e.iter('frame'):
-                            label=value(frame)
-                            if label:stacks[label]+=1
+                            label=resolve(frame).attrib.get('name') or value(frame)
+                            if label:sample_frames.add(label)
+                stacks.update(sample_frames)
             item['topStackFrames']=stacks.most_common(25)
         result[name]=item
+    if not result:
+        raise SystemExit("No tables exported: verify the requested Instruments schema and XPath.")
     print(json.dumps(result,indent=2))
 
 if __name__=='__main__':main()

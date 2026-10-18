@@ -24,12 +24,16 @@ def main():
     ap.add_argument('--label', required=True)
     ap.add_argument('--runs', type=int, default=3)
     ap.add_argument('--template', default='Animation Hitches')
+    ap.add_argument('--instrument', action='append', default=[], help='Add a named instrument to the template')
     ap.add_argument('--drive-only', action='store_true')
+    ap.add_argument('--workload', choices=['full', 'shell', 'idle'], default='full')
     args = ap.parse_args()
     out = ROOT / 'build/motion-profile' / args.label
     out.mkdir(parents=True, exist_ok=True)
-    scratch = pathlib.Path(tempfile.mkdtemp(prefix='agent-island-motion-'))
+    scratch = pathlib.Path(tempfile.mkdtemp(prefix='agent-island-motion-', dir='/tmp'))
     suffix = '.motion-' + scratch.name
+    trace_tmp = scratch/'trace-tmp'
+    trace_tmp.mkdir()
     post = out / 'post'
     source = out / 'post.swift'
     write(source, '''import Foundation
@@ -46,7 +50,7 @@ sys.stdin.readline()
 def emit(x): print(json.dumps(x),flush=True)
 emit({'type':'system','subtype':'init','session_id':'motion-chat'})
 for i in range(32):
- emit({'type':'assistant','message':{'content':[{'type':'text','text':('Measured fixture %d. '%i)+('A native interface provides immediate feedback. '*12)}]}})
+ emit({'type':'assistant','message':{'content':[{'type':'text','text':('Measured fixture %d. '%i)+('A native interface provides immediate feedback. '*(i+1))}]}})
  time.sleep(.08)
 emit({'type':'control_request','request_id':'plan','request':{'subtype':'can_use_tool','tool_name':'ExitPlanMode','input':{'plan':'# Motion fixture plan\\n\\n'+('## Verify interaction\\n\\n- Check interruption.\\n- Check Reduce Motion.\\n\\n'*24)}}})
 sys.stdin.readline()
@@ -68,12 +72,13 @@ emit({'type':'result','subtype':'success','is_error':False,'session_id':'motion-
     shutil.copytree(args.app.resolve(), fixture_app, symlinks=True)
     bundle_id = 'com.abmbodj.agentisland.motion.' + scratch.name.rsplit('-', 1)[-1].replace('_', '-')
     subprocess.run(['/usr/libexec/PlistBuddy', '-c', 'Set :CFBundleIdentifier ' + bundle_id, str(fixture_app/'Contents/Info.plist')], check=True)
-    subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(fixture_app)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(['codesign', '--force', '--deep', '--sign', '-', '--preserve-metadata=entitlements', str(fixture_app)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     env = dict(os.environ, CFFIXED_USER_HOME=str(home), AGENT_ISLAND_HOME=str(home), AGENT_ISLAND_SOCKET=str(scratch/'island.sock'), AGENT_ISLAND_DEBUG_ID=suffix, AGENT_ISLAND_TOOLS=str(fake.parent))
     app_log = open(out/'app.log', 'w')
-    app = subprocess.Popen([str(fixture_app/'Contents/MacOS/Agent Island'), '-setupShown', 'YES', '-composerDir', str(cwd), '-SUEnableAutomaticChecks', 'NO'], env=env, stdout=app_log, stderr=app_log)
+    app = subprocess.Popen([str(fixture_app/'Contents/MacOS/Agent Island'), '-setupShown', 'YES', '-declinedMove', 'YES', '-composerDir', str(cwd), '-SUEnableAutomaticChecks', 'NO'], env=env, stdout=app_log, stderr=app_log)
     sleeper = subprocess.Popen(['sleep', '1200'])
     children = []
+    recorder = None
     def post_cmd(name, arg=''):
         subprocess.run([str(post), suffix, name, arg], check=True)
     hook = args.app.resolve()/'Contents/Helpers/island-hook'
@@ -92,41 +97,69 @@ emit({'type':'result','subtype':'success','is_error':False,'session_id':'motion-
             if app.poll() is not None: raise RuntimeError('Fixture app exited; inspect app.log')
             if time.monotonic()>deadline: raise RuntimeError('Fixture socket did not appear')
             time.sleep(.05)
-        meta = dict(appPid=app.pid, scratch=str(scratch), suffix=suffix, template=args.template, app=str(args.app.resolve()), fixtureApp=str(fixture_app), bundleId=bundle_id)
+        meta = dict(appPid=app.pid, scratch=str(scratch), suffix=suffix, template=args.template, instruments=args.instrument, app=str(args.app.resolve()), fixtureApp=str(fixture_app), bundleId=bundle_id)
         write(out/'session.json', json.dumps(meta, indent=2))
-        for i in range(4): fire('UserPromptSubmit',i)
-        fire('Stop',2)
+        if args.workload != 'idle':
+            # A socket alone does not establish that DEBUG interaction hooks work.
+            state = scratch / 'debug-state.json'
+            post_cmd('state', str(state))
+            deadline = time.monotonic() + 3
+            while not state.exists():
+                if time.monotonic() > deadline:
+                    raise RuntimeError('DEBUG state hook did not respond; use a Debug build for interaction workloads')
+                time.sleep(.05)
+            for i in range(4): fire('UserPromptSubmit',i)
+            fire('Stop',2)
         for run in range(1,args.runs+1):
             recorder = None
             if not args.drive_only:
+                required_gib = 4 if args.template == 'Animation Hitches' else 1
+                if shutil.disk_usage(ROOT).free < required_gib * 1024**3:
+                    raise RuntimeError(f'Profiling needs at least {required_gib} GiB free temporary disk space; existing traces are retained')
                 trace = out/f'run-{run}.trace'
                 if trace.exists(): raise RuntimeError(f'Trace exists: {trace}, choose a new label')
                 log = open(out/f'run-{run}.log','w')
-                recorder = subprocess.Popen(['xcrun','xctrace','record','--template',args.template,'--attach',str(app.pid),'--time-limit','26s','--output',str(trace),'--no-prompt'],stdout=log,stderr=log)
-                deadline = time.monotonic()+25
+                command = ['xcrun','xctrace','record','--template',args.template,'--attach',str(app.pid),'--time-limit',('8s' if args.workload == 'shell' else '26s'),'--output',str(trace),'--no-prompt']
+                for instrument in args.instrument:
+                    command.extend(['--instrument', instrument])
+                recorder = subprocess.Popen(command,stdout=log,stderr=log,env=dict(os.environ, TMPDIR=str(trace_tmp)+'/'))
+                deadline = time.monotonic()+60
                 while 'Ctrl-C' not in (out/f'run-{run}.log').read_text():
                     if recorder.poll() is not None: raise RuntimeError('Recorder exited; inspect recording log')
                     if time.monotonic()>deadline: raise RuntimeError('Recorder did not start')
                     time.sleep(.1)
             print(f'{args.label}: workload {run} started',flush=True)
             start=time.monotonic()
-            for _ in range(3):
-                post_cmd('expand','open');time.sleep(.5)
-                post_cmd('expand','collapse');time.sleep(.4)
-            for _ in range(12):
-                post_cmd('expand','open');time.sleep(.075)
-                post_cmd('expand','collapse');time.sleep(.075)
-            post_cmd('expand','open');time.sleep(.4)
-            post_cmd('tap','motion-0');time.sleep(1.2)
-            post_cmd('back');time.sleep(.35)
-            post_cmd('newchat');time.sleep(.35)
-            post_cmd('compose','claude|Profile native motion with the local fixture.');time.sleep(4)
-            post_cmd('back');time.sleep(.4)
-            fire('PermissionRequest-Bash',1,hold=True);time.sleep(.4)
-            post_cmd('respond','allow');time.sleep(.5)
-            post_cmd('respond','undo');time.sleep(.3)
-            post_cmd('expand','collapse')
-            write(out/f'run-{run}-workload.json',json.dumps(dict(duration=time.monotonic()-start, rapidIntervalMs=75),indent=2))
+            if args.workload == 'idle':
+                time.sleep(12)
+            elif args.workload == 'shell':
+                for _ in range(2):
+                    post_cmd('expand','open');time.sleep(.45)
+                    post_cmd('expand','collapse');time.sleep(.4)
+                for _ in range(12):
+                    post_cmd('expand','open');time.sleep(.075)
+                    post_cmd('expand','collapse');time.sleep(.075)
+            else:
+                for _ in range(3):
+                    post_cmd('expand','open');time.sleep(.5)
+                    post_cmd('expand','collapse');time.sleep(.4)
+                for _ in range(12):
+                    post_cmd('expand','open');time.sleep(.075)
+                    post_cmd('expand','collapse');time.sleep(.075)
+                post_cmd('expand','open');time.sleep(.4)
+                post_cmd('tap','motion-0');time.sleep(1.2)
+                post_cmd('back');time.sleep(.35)
+                post_cmd('newchat');time.sleep(.35)
+                post_cmd('compose','claude|Profile native motion with the local fixture.');time.sleep(4)
+                post_cmd('back');time.sleep(.4)
+                fire('PermissionRequest-Bash',1,hold=True);time.sleep(.4)
+                post_cmd('respond','allow');time.sleep(.5)
+                post_cmd('respond','undo');time.sleep(.3)
+                post_cmd('expand','collapse')
+            elapsed = time.monotonic()-start
+            write(out/f'run-{run}-workload.json',json.dumps(dict(duration=elapsed, rapidIntervalMs=75, workload=args.workload),indent=2))
+            if recorder and elapsed + .6 > (8 if args.workload == 'shell' else 26):
+                raise RuntimeError('Workload exceeded recording window; this trace is not complete evidence')
             if recorder:
                 try: recorder.wait(timeout=240)
                 except subprocess.TimeoutExpired:
@@ -135,16 +168,29 @@ emit({'type':'result','subtype':'success','is_error':False,'session_id':'motion-
                     except subprocess.TimeoutExpired: recorder.kill(); recorder.wait()
                     raise RuntimeError('xctrace failed to finalize within 240 seconds; trace is not valid evidence')
                 if recorder.returncode: raise RuntimeError('xctrace failed; inspect recording log')
+                # Instruments can leave raw kernel staging files even after a successful save.
+                # This directory belongs only to this capture; the saved .trace is self-contained.
+                # Some kernel providers ignore TMPDIR; inspect task-owned global staging files manually.
+                shutil.rmtree(trace_tmp)
+                trace_tmp.mkdir()
             print(f'{args.label}: workload {run} complete',flush=True)
         if args.drive_only:
             print(f'App ready for native UI checks: PID {app.pid}, session {out / "session.json"}',flush=True)
             time.sleep(300)
     finally:
+        if recorder is not None and recorder.poll() is None:
+            recorder.send_signal(signal.SIGINT)
+            try:
+                recorder.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                recorder.kill()
+                recorder.wait()
         app.terminate(); sleeper.terminate()
         for p in children:
             if p.poll() is None: p.terminate()
         app.wait(timeout=10); sleeper.wait(timeout=10)
         app_log.close()
+        shutil.rmtree(trace_tmp, ignore_errors=True)
         print(f'Fixture artifacts retained under {out}; scratch {scratch}',flush=True)
 
 if __name__ == '__main__': main()

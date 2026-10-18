@@ -19,7 +19,11 @@ final class IslandView: NSView {
     private let contentMask = CAShapeLayer()
     private lazy var motion = IslandMotion(fill: fill, mask: contentMask)
     /// Conservative active-flight bounds, used until the current CA animation actually finishes.
-    var motionRect: CGRect { motion.isAnimating ? motion.bounds.union(islandRect) : islandRect }
+    var motionRect: CGRect {
+        guard motion.isAnimating else { return islandRect }
+        return islandRect.isEmpty ? motion.bounds : motion.bounds.union(islandRect)
+    }
+    var motionIsAnimating: Bool { motion.isAnimating }
     var onMotionCompletion: (() -> Void)? {
         didSet { motion.onCompletion = { [weak self] in self?.onMotionCompletion?() } }
     }

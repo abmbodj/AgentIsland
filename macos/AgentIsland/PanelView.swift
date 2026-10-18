@@ -273,7 +273,7 @@ struct PanelView: View {
     @State private var stripHeight: CGFloat = 0
 
     private var list: some View {
-        TimelineView(.periodic(from: .now, by: model.isOpen ? 1 : 3600)) { ctx in
+        TimelineView(.periodic(from: model.isOpen ? .now : .distantFuture, by: 1)) { ctx in
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 0) {
                     CardArea(model: model)
