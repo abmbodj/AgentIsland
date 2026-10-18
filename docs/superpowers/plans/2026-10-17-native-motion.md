@@ -16,4 +16,4 @@ Budgets: zero collapsed-idle polling/CPU work; resident memory under 60 MB; bund
 
 The design was self-reviewed for placeholders, contradictions, scope and ambiguity before its initial commit. The user's explicit request to implement the approved plan supplies the written-design approval. Execute with the subagent-driven-development skill, preserving file ownership and reviewing the whole branch before delivery.
 
-Verification and release status: see [measured report](../specs/2026-10-18-native-motion-verification.md). Six comparable captures complete; persistent long hitches leave the performance gate unresolved. No merge or reinstall until it passes.
+Verification and release status: see [measured report](../specs/2026-10-18-native-motion-verification.md). Six comparable captures complete; persistent long hitches leave the performance gate unresolved. The user subsequently requested shipping and installation despite the reported limitations; see the explicit shipping exception in PRODUCT.md and the verification report. Performance targets remain follow-up work.

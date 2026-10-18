@@ -1,6 +1,6 @@
 # Native motion verification — 18 October 2026
 
-Status: implementation and functional checks complete; **performance/release gate unresolved**. Do not merge or install this branch. No claim of sustained 60 fps.
+Status: implementation and functional checks complete; **performance targets remain unresolved**. After reviewing these limitations, the user requested shipping and installation on 18 October 2026. This shipping decision accepts the measured exceptions below; it does not establish sustained 60 fps or satisfy the original performance gate.
 
 ## Changes and ownership
 
@@ -88,4 +88,4 @@ Repeat with schema time-profile. Detailed extracted comparison: build/motion-pro
 
 ## Delivery
 
-Draft PR only while the 16.7 ms performance gate and active resident-memory verification remain unresolved. Functional review can be clean while performance remains insufficient. Squash merge and scripts/install.sh from merged main are intentionally pending those gates.
+The user subsequently requested “lets get this shipped and installed” after receiving the measured limitations. Ship PR #33 through the normal squash-merge workflow and install with scripts/install.sh from merged main. The original 16.7 ms, strict idle and resident-memory targets remain unmet or unverified; this is an explicit shipping exception, not a passing performance result. Keep the measurements above as follow-up work.

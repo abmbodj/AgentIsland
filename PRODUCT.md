@@ -46,6 +46,8 @@ Being light is a core principle, weighed against every feature. A status light t
 - **Few dependencies.** Swift: Sparkle only. Rust core: `libc`, `serde`, `serde_json`, `sha2`, `similar`. Bundle under 15 MB (measured 9.9 MB).
 - **A small surface.** Prefer a good default to a setting, and a row or card to a new screen.
 
+**Shipping exception — native motion, 18 October 2026.** The user accepted shipping after reviewing the measurements in `docs/superpowers/specs/2026-10-18-native-motion-verification.md`. Fresh empty Release residency measured 69.98 to 64.52 MB, above the 60 MB target; those samples also recorded 1–2 interrupt wakeups. Sustained 60 fps is unverified and long interaction hitches remain. These targets remain follow-up work; this exception does not redefine the budgets. Release bundle size is 10.533 MB, with no added dependencies or startup work.
+
 **Evaluating a feature.** Before building it, answer these in its PR description (and its plan, if there is one):
 
 1. What does it cost while collapsed and idle? Anything above zero needs a strong reason.
