@@ -4,12 +4,13 @@ A calm, notch-style status light for local AI coding agents (Claude Code and Cod
 
 Fully local: no accounts, no telemetry. The only network request is the optional update check.
 
-Status: under construction. See [`docs/PLAN.md`](docs/PLAN.md).
+Status: early releases. See [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Using it
 
 - Hover the notch (or click it) to see sessions; click a row to jump to its terminal tab or pane.
 - When an agent needs you the island opens a card: **Allow / Deny / Allow for session**, or the numbered answers to its question. Every response has a 2-second undo.
+- Start a chat from the island: pick model, effort and mode, paste or upload images, answer the agent's questions, review and revise its plan, then have it implement. Chats show a total diff summary and resume in the native CLI or desktop app. Rename or delete them from the session list.
 - **⌥⌘I** gives the island the keyboard: ⌘Y allow, ⌘N deny, ⌘1–9 answer, J/K move, Esc undo or close. Rebind it in Settings.
 
 ## Install
@@ -21,7 +22,7 @@ Download [`AgentIsland.dmg`](https://github.com/abmbodj/AgentIsland/releases/lat
 One-time: `xcrun notarytool store-credentials AgentIsland` (Apple ID, team `ZC5949HH2P`, app-specific password). Then:
 
 ```sh
-scripts/release.sh 0.1.0      # build, sign, notarize, DMG + appcast, publish the GitHub release
+scripts/release.sh 0.2.0      # build, sign, notarize, DMG + appcast, publish the GitHub release
 ```
 
 `--dry-run` builds without publishing; `--unsigned` skips notarization (never publishable).
@@ -33,7 +34,7 @@ Requires Xcode 26+, Rust (`brew install rustup && rustup default stable`), Xcode
 ```sh
 cd core && cargo test          # state machine, installer, E2E hook→socket→core
 scripts/install.sh             # Release build signed with your Apple Development cert → /Applications
-scripts/release.sh 0.1.0 --dry-run   # signed, notarized (with Developer ID) DMG + Sparkle appcast
+scripts/release.sh 0.2.0 --dry-run   # signed, notarized (with Developer ID) DMG + Sparkle appcast
 ```
 
 Debug aids: `~/Library/Application Support/AgentIsland/bin/island-hook status` prints the live session snapshot.
