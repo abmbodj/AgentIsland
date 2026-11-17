@@ -123,6 +123,7 @@ struct LiveUsageFooter: View {
     @ObservedObject var model: PanelModel
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { ctx in model.usageFooter(now: ctx.date) }
+        // The new-session screen stays mounted while collapsed when nothing is running: no ticks then.
+        TimelineView(.periodic(from: model.isOpen ? .now : .distantFuture, by: 30)) { ctx in model.usageFooter(now: ctx.date) }
     }
 }
