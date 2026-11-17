@@ -1138,7 +1138,9 @@ struct ListHeader: View {
 
     private var summary: String {
         let sessions = model.snapshot.sessions
-        let active = sessions.filter { [.working, .needsInput].contains($0.state) }.count
+        // Chats no hook session has matched yet show their own Working row, so they count too.
+        let loose = model.chats.filter { c in c.status == "running" && !sessions.contains { $0.id == c.sessionId } }.count
+        let active = sessions.filter { [.working, .needsInput].contains($0.state) }.count + loose
         let waiting = sessions.filter { $0.state == .needsInput }.count
         var parts = [active == 0 ? "Nothing running" : "\(active) active"]
         if waiting > 0 { parts.append("\(waiting) need\(waiting == 1 ? "s" : "") you") }

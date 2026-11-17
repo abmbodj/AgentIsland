@@ -28,7 +28,7 @@ Flat. The whole island is opaque notch black (no glass, no blur, no shadow); hie
 
 ### Usage footer
 
-Pinned under every expanded screen (list, new session, conversation), below a hairline. One row per provider, Claude Code then Codex, each named with its mark so neither reads as the other's consumption. Each limit window is a column: its name (5-hour, Weekly), the percentage left, a 4pt capsule meter (raised track, off-white fill) and "Resets in …". Values are the last reported ones, never extrapolated; older than 15 minutes says "As of … ago"; a provider with no report says "Not reported yet". Left ≤10% is bold, not amber. The fill moves only when the value changes.
+Pinned under every expanded screen (list, new session, conversation), below a hairline. One row per provider, Claude Code then Codex, each named with its mark so neither reads as the other's consumption. Each limit window is a column of two lines: its name (5-hour, Weekly) with "resets …" on the first, a 4pt capsule meter (raised track, off-white fill) and the percentage left on the second. Values are the last reported ones, never extrapolated; older than 15 minutes, the reset time is replaced by "stale" and the provider name's tooltip says "As of … ago"; a provider with no report says "Not reported yet". Left ≤10% is bold, not amber. The fill moves only when the value changes.
 
 ### Chat (composer and conversation)
 
