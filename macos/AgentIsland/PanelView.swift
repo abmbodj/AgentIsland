@@ -168,7 +168,11 @@ final class PanelModel: ObservableObject {
         let saved = chats.map { chat in
             let key = chat.sessionId.map { SessionKey(agent: chat.agent, id: $0) }
             if let key, savedBySession[key] == nil { savedBySession[key] = chat }
-            let state: SessionState = chat.status == "running" ? .working : chat.status == "failed" ? .error : .idle
+            let state: SessionState
+            if chat.needsInput == true { state = .needsInput }
+            else if chat.status == "running" { state = .working }
+            else if chat.status == "failed" { state = .error }
+            else { state = .idle }
             let session = chat.sessionId.flatMap { codexSessions[$0] }
             return SessionList.Saved(id: chat.id, agent: chat.agent, session: key, title: title(chat, codexSession: session),
                                      cwd: chat.cwd, state: state)

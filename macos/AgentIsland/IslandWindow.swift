@@ -287,7 +287,11 @@ final class IslandController {
         openTimer?.cancel()
         closeTimer?.cancel()
         pinned = on && pin
-        if !on { autoOpened = false; model.closeChat(animated: false) }
+        if !on {
+            endSummon(collapse: false)
+            autoOpened = false
+            model.closeChat(animated: false)
+        }
         guard on != expanded else { render(animated: true); return }
         expanded = on
         render(animated: true)
@@ -454,7 +458,7 @@ final class IslandController {
         if s.state == .finished {
             model.acknowledgeCompletion(s)
         } else {
-            CoreBridge.shared.send(["type": "viewed", "agent": s.agent, "id": s.id])
+            CoreBridge.shared.send(["type": "dismissNextStep", "agent": s.agent, "id": s.id])
         }
         Jumper.jump(s) { [weak self] hint in
             guard let self else { return }

@@ -302,6 +302,14 @@ impl Session {
             self.since = now;
         }
     }
+
+    fn dismiss_next_step(&mut self, now: Millis) {
+        // The next-step box lives in the app, which owns it again once the user goes there.
+        self.pending.retain(|a| a.tool != NEXT_STEP_TOOL);
+        if self.pending.is_empty() && self.state == State::NeedsInput {
+            self.set(State::Idle, now);
+        }
+    }
 }
 
 impl Store {
@@ -899,14 +907,16 @@ impl Store {
     /// The user looked at the session (jumped to it, or its row was visible in the panel).
     pub fn viewed(&mut self, agent: &str, id: &str, now: Millis) {
         if let Some(s) = self.find(agent, id) {
-            // The next-step box lives in the app; once the user went there, it's theirs.
-            s.pending.retain(|a| a.tool != NEXT_STEP_TOOL);
-            if s.pending.is_empty() && s.state == State::NeedsInput {
-                s.set(State::Idle, now);
-            }
+            s.dismiss_next_step(now);
             if s.state == State::Finished {
                 s.set(State::Idle, now);
             }
+        }
+    }
+
+    pub fn dismiss_next_step(&mut self, agent: &str, id: &str, now: Millis) {
+        if let Some(s) = self.find(agent, id) {
+            s.dismiss_next_step(now);
         }
     }
 

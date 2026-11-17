@@ -10,6 +10,7 @@ struct ChatInfo: Decodable, Equatable, Identifiable {
     var title: String
     /// "running" | "idle" | "failed"
     var status: String
+    var needsInput: Bool?
     var sessionId: String?
     var error: String?
     var handoff: ChatHandoff?
@@ -387,6 +388,8 @@ extension PanelModel {
             if let key = entry.session, let session = snapshot.sessions.first(where: { $0.key == key }) {
                 return resolveSessionTap(session)
             }
+            // A saved chat may have acquired a session ID since the last list poll.
+            refreshChats()
             return chats.first { chat in
                 if let id = entry.savedID, chat.id == id { return true }
                 guard let key = entry.session else { return false }
@@ -400,6 +403,7 @@ extension PanelModel {
     func tap(_ s: SessionInfo) {
         openChat { [self] in
             if let session = snapshot.sessions.first(where: { $0.key == s.key }) { return resolveSessionTap(session) }
+            refreshChats()
             return chatFor(s)
         }
     }

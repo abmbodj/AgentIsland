@@ -1236,24 +1236,18 @@ struct DeleteConfirm: View {
 struct ChatRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let chat: ChatInfo
+    let state: SessionState
     let context: String?
     let selected: Bool
     @ObservedObject var model: PanelModel
     let openRow: () -> Void
     @State private var hover = false
 
-    private var state: SessionState {
-        switch chat.status {
-        case "running": return .working
-        case "failed": return .error
-        default: return .idle
-        }
-    }
-
     private var status: String {
-        switch chat.status {
-        case "running": return "Working"
-        case "failed": return "Failed"
+        switch state {
+        case .working: return "Working"
+        case .error: return "Failed"
+        case .needsInput: return "Needs your input"
         default: return "Idle"
         }
     }
@@ -1263,7 +1257,8 @@ struct ChatRow: View {
             AgentBadge(agent: chat.agent, state: state, size: 16).frame(width: 18, height: 18)
             VStack(alignment: .leading, spacing: 2) {
                 SessionTitle(model: model, keys: model.titleKeys(chat), title: model.title(chat))
-                Text(status + (context.map { " · " + $0 } ?? "")).font(.system(size: 11)).foregroundStyle(secondary)
+                Text(status + (context.map { " · " + $0 } ?? "")).font(.system(size: 11))
+                    .foregroundStyle(state == .needsInput ? amber : secondary)
                     .lineLimit(1).truncationMode(.middle)
             }
             Spacer(minLength: 8)

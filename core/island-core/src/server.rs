@@ -434,9 +434,11 @@ impl Core {
     pub fn send(&self, cmd: &Value) {
         let mut g = self.inner.lock();
         match cmd["type"].as_str() {
-            Some("viewed") => {
+            Some(kind @ ("viewed" | "dismissNextStep")) => {
                 let (a, id) = (cmd["agent"].as_str().unwrap_or_default(), cmd["id"].as_str().unwrap_or_default());
-                if let Some(since) = cmd["finishedSince"].as_u64() {
+                if kind == "dismissNextStep" {
+                    g.store.dismiss_next_step(a, id, now_ms());
+                } else if let Some(since) = cmd["finishedSince"].as_u64() {
                     g.store.viewed_completion(a, id, since, now_ms());
                 } else {
                     g.store.viewed(a, id, now_ms());

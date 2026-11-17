@@ -202,6 +202,8 @@ fn acknowledging_an_older_completion_keeps_the_current_one() {
     let (agent, id) = sid(&s);
     s.viewed_completion(&agent, &id, T0 + 1, T0 + 4);
     assert_eq!(only(&s).state, State::Finished);
+    s.dismiss_next_step(&agent, &id, T0 + 4);
+    assert_eq!(only(&s).state, State::Finished);
     s.viewed_completion(&agent, &id, T0 + 3, T0 + 4);
     assert_eq!(only(&s).state, State::Idle);
 }

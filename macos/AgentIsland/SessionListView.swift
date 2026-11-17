@@ -20,16 +20,22 @@ struct SessionListView: View {
 
     var body: some View {
         TimelineView(.periodic(from: model.isOpen ? .now : .distantFuture, by: 1)) { ctx in
+            // Panel padding is 4 top + 10 bottom. Keep room to browse even with a long request.
+            let available = max(0, model.listHeightLimit - 14 - headerHeight - stripHeight)
+            let cardViewport = min(cardHeight, available - min(72, available / 3))
+            let room = available - cardViewport
             VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 0) {
-                    CardArea(model: model)
-                    DiskAccessBanner(model: model)
-                }
+                ScrollView(.vertical, showsIndicators: cardHeight > cardViewport) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        CardArea(model: model)
+                        DiskAccessBanner(model: model)
+                    }
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0 }
+                }
+                .frame(height: cardViewport)
+                .id(model.current?.item.id)
                 listHeader
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
-                // Panel padding is 4 top + 10 bottom.
-                let room = max(0, model.listHeightLimit - 14 - cardHeight - headerHeight - stripHeight)
                 let viewport = rowsHeight > 0 ? min(rowsHeight, room) : room
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -228,7 +234,8 @@ struct SessionListView: View {
         if let saved, model.confirmingDelete == saved.id {
             DeleteConfirm(chat: saved, model: model).transition(.opacity)
         } else if let session = entry.session.flatMap({ key in model.snapshot.sessions.first { $0.key == key } }) {
-            SessionRow(session: session, context: context, selected: selected, now: now, model: model, openRow: { model.openListEntry(entry) })
+            SessionRow(session: session, state: entry.state, context: context, selected: selected, now: now,
+                       model: model, openRow: { model.openListEntry(entry) })
                 .modifier(FinishedVisibility(model: model, entry: entry, viewport: completionViewport))
             if model.openGroups.contains(session.key) {
                 ForEach(session.subagents, id: \.id) { sub in
@@ -236,7 +243,7 @@ struct SessionListView: View {
                 }
             }
         } else if let saved {
-            ChatRow(chat: saved, context: context, selected: selected, model: model, openRow: { model.openListEntry(entry) })
+            ChatRow(chat: saved, state: entry.state, context: context, selected: selected, model: model, openRow: { model.openListEntry(entry) })
         }
     }
 }
@@ -272,6 +279,7 @@ private struct FinishedVisibility: ViewModifier {
 private struct SessionRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let session: SessionInfo
+    let state: SessionState
     let context: String?
     let selected: Bool
     let now: Date
@@ -280,7 +288,7 @@ private struct SessionRow: View {
     @State private var hover = false
 
     private var status: (String, Color) {
-        switch session.state {
+        switch state {
         case .working: return (session.activity.isEmpty ? "Working" : session.activity, secondary)
         case .needsInput: return ("Needs your input", amber)
         case .finished: return ("Done", green)
@@ -295,7 +303,7 @@ private struct SessionRow: View {
         let open = model.openGroups.contains(session.key)
         let running = session.subagents.filter { !$0.done }.count
         HStack(alignment: .center, spacing: 10) {
-            AgentBadge(agent: session.agent, state: session.state, size: 16)
+            AgentBadge(agent: session.agent, state: state, size: 16)
                 .frame(width: 18, height: 18)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -307,7 +315,7 @@ private struct SessionRow: View {
                 }
                 HStack(spacing: 6) {
                     Text(model.hint[session.id] ?? status.0)
-                        .font(.system(size: 11, weight: session.state == .needsInput ? .medium : .regular))
+                        .font(.system(size: 11, weight: state == .needsInput ? .medium : .regular))
                         .foregroundStyle(model.hint[session.id] == nil ? status.1 : muted)
                         .lineLimit(1)
                         .truncationMode(.middle)
