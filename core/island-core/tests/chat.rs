@@ -824,6 +824,8 @@ fn opening_history_defers_reading_until_the_first_transcript_request() {
     let id = chats.open_history("claude", root.to_str().unwrap(), "history", file.to_str().unwrap()).unwrap();
     std::fs::write(&file, message("after")).unwrap();
     assert_eq!(chats.transcript(id, 0).unwrap()["entries"][0]["text"], "after");
+    chats.discard_history(id);
+    assert!(chats.transcript(id, 0).is_err());
 }
 
 #[test]

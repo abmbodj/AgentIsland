@@ -15,13 +15,7 @@ final class PanelModel: ObservableObject {
     /// Only tick the elapsed-time clock while the panel is open.
     @Published var isOpen = false {
         didSet {
-            if isOpen && !oldValue {
-                SessionTitles.shared.load()
-                refreshPRs()
-                if initialChatLoads.isEmpty { refreshChats() }
-                startPolling()
-                checkDiskAccess()
-            }
+            if isOpen && !oldValue { SessionTitles.shared.load(); refreshPRs(); refreshChats(); startPolling(); checkDiskAccess() }
             if !isOpen { loadingChat = false; editingTitle = nil; planReader = nil; chat = nil; entries = []; composing = false; confirmingDelete = nil } // collapsing returns to the list; running chats carry on
         }
     }

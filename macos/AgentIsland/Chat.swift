@@ -379,12 +379,17 @@ extension PanelModel {
     /// the plan or jumps to the terminal.
     func tap(_ s: SessionInfo) {
         // The chat list is only polled while open, so a just-started chat may not be linked to its row yet.
-        if chatFor(s) == nil && initialChatLoads.isEmpty { refreshChats() }
+        if chatFor(s) == nil { refreshChats() }
         if let c = chatFor(s) { openChat(c); return }
         let fallback = { [self] in if s.hasPlan { openSessionPlan(s) } else { onJump(s) } }
         guard let path = s.transcriptPath else { return fallback() }
-        guard let r = try? CoreBridge.shared.call(["op": "chatHistory", "agent": s.agent, "cwd": s.cwd, "sessionId": s.id, "path": path], as: ChatStarted.self) else { return fallback() }
-        openChat(ChatInfo(id: r.id, agent: s.agent, cwd: s.cwd, title: s.project, status: "idle", sessionId: s.id, session: s))
+        openChat {
+            guard let r = try? CoreBridge.shared.call(["op": "chatHistory", "agent": s.agent, "cwd": s.cwd, "sessionId": s.id, "path": path], as: ChatStarted.self) else {
+                fallback()
+                return nil
+            }
+            return ChatInfo(id: r.id, agent: s.agent, cwd: s.cwd, title: s.project, status: "idle", sessionId: s.id, session: s)
+        }
     }
 
     /// The agent is working: this chat's own turn, or the history's session in its terminal or app.
@@ -409,7 +414,13 @@ extension PanelModel {
     }
 
     func openChat(_ c: ChatInfo) {
+        openChat { c }
+    }
+
+    private func openChat(resolving resolve: @escaping () -> ChatInfo?) {
         navigate(forward: true) { [self] in
+            // Resolve the history ID in the same turn that displays it. An earlier load may be cleaning up.
+            guard isOpen, chat == nil, let c = resolve() else { return }
             entries = []
             plans = []
             planReader = nil
@@ -436,7 +447,7 @@ extension PanelModel {
     func closeChat(animated: Bool = true) {
         let change = { [self] in
             // The initial read owns the history until it finishes.
-            if let c = chat, c.session != nil, !loadingChat, chatStatus != "running" { discardHistory(c.id) }
+            if let c = chat, c.session != nil, !initialChatLoads.contains(c.id) { discardHistory(c.id) }
             loadingChat = false
             chat = nil
             replySettings = nil
@@ -447,7 +458,7 @@ extension PanelModel {
             composing = false
             disconnected = false
             confirmingDelete = nil
-            if initialChatLoads.isEmpty { refreshChats() }
+            refreshChats()
         }
         if animated { navigate(forward: false, change) } else { change() }
     }
@@ -633,7 +644,7 @@ extension PanelModel {
     }
 
     private func discardHistory(_ id: Int) {
-        _ = try? CoreBridge.shared.call(["op": "chatDelete", "id": id])
+        _ = try? CoreBridge.shared.call(["op": "chatDiscardHistory", "id": id])
     }
 
     private func loadInitialTranscript(_ c: ChatInfo) {
@@ -643,14 +654,14 @@ extension PanelModel {
             DispatchQueue.main.async { [self] in
                 initialChatLoads.remove(c.id)
                 guard chat?.id == c.id else {
-                    if c.session != nil, let transcript, transcript.status != "running" { discardHistory(c.id) }
+                    if c.session != nil { discardHistory(c.id) }
                     return
                 }
-                if let transcript {
-                    applyTranscript(transcript, to: c)
-                } else {
-                    disconnected = true
+                guard let transcript else {
+                    if !disconnected { disconnected = true }
+                    return
                 }
+                applyTranscript(transcript, to: c)
                 loadingChat = false
                 loadOptions(refresh: true)
             }
@@ -658,7 +669,11 @@ extension PanelModel {
     }
 
     func pollChat() {
-        guard let c = chat, !loadingChat else { return }
+        guard let c = chat else { return }
+        if loadingChat {
+            loadInitialTranscript(c)
+            return
+        }
         do {
             let t = try CoreBridge.shared.call(["op": "transcript", "id": c.id, "since": rev], as: ChatTranscript.self)
             applyTranscript(t, to: c)
@@ -702,7 +717,7 @@ extension PanelModel {
             if self.chat != nil {
                 self.pollChat()
             }
-            if tick % 12 == 0 && self.initialChatLoads.isEmpty {
+            if tick % 12 == 0 {
                 self.refreshChats()
                 self.processHandoffs()
             }

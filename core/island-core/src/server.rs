@@ -506,6 +506,10 @@ impl Core {
                 self.chats.delete(req["id"].as_u64().unwrap_or_default());
                 Ok(Value::Null)
             }
+            "chatDiscardHistory" => {
+                self.chats.discard_history(req["id"].as_u64().unwrap_or_default());
+                Ok(Value::Null)
+            }
             "transcript" => self.chats.transcript(req["id"].as_u64().unwrap_or_default(), req["since"].as_u64().unwrap_or_default()),
             "chatList" => Ok(self.chats.list()),
             "chatHistory" => {

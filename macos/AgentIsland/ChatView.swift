@@ -432,8 +432,8 @@ struct ChatView: View {
     @State private var wheel: Any?
 
     private var statusText: String {
-        if model.loadingChat { return "Loading" }
         if model.disconnected { return "Disconnected" }
+        if model.loadingChat { return "Loading" }
         if model.working { return "Working" }
         switch model.chatStatus {
         case "running": return "Working"
@@ -566,12 +566,12 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if model.loadingChat {
+                    if model.loadingChat && !model.disconnected {
                         ProgressView("Loading conversation…")
                             .controlSize(.small)
                             .frame(maxWidth: .infinity)
                             .padding(.top, 60)
-                    } else if model.entries.isEmpty {
+                    } else if model.entries.isEmpty && !model.disconnected {
                         empty
                     }
                     ForEach(model.planVisibleEntries) { e in
@@ -586,7 +586,7 @@ struct ChatView: View {
                     }
                     if let q = model.chatQuestion {
                         QuestionCard(model: model, questions: q).transition(.rise(reduceMotion: reduceMotion))
-                    } else if model.working && !model.disconnected {
+                    } else if model.working && !model.loadingChat && !model.disconnected {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.mini)
                             Text("Working").font(.system(size: 12)).foregroundStyle(secondary)

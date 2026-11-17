@@ -882,6 +882,16 @@ impl Chats {
         self.list.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
     }
 
+    /// Free an external history view without stopping a resumed turn.
+    pub fn discard_history(&self, id: u64) {
+        let mut list = self.list.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(chat) = list.get(&id).filter(|chat| chat.external.is_some()).cloned() else { return };
+        let g = chat.lock();
+        if g.status != Status::Running {
+            list.remove(&id);
+        }
+    }
+
     pub fn transcript(&self, id: u64, since: u64) -> Result<Value, String> {
         let chat = self.get(id)?;
         let mut g = chat.lock();
