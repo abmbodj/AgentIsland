@@ -379,19 +379,12 @@ extension PanelModel {
     /// the plan or jumps to the terminal.
     func tap(_ s: SessionInfo) {
         // The chat list is only polled while open, so a just-started chat may not be linked to its row yet.
-        if chatFor(s) == nil { refreshChats() }
+        if chatFor(s) == nil && initialChatLoads.isEmpty { refreshChats() }
         if let c = chatFor(s) { openChat(c); return }
         let fallback = { [self] in if s.hasPlan { openSessionPlan(s) } else { onJump(s) } }
         guard let path = s.transcriptPath else { return fallback() }
-        // A long transcript takes a moment to read; off the main thread so the island never stalls.
-        DispatchQueue.global(qos: .userInitiated).async { [self] in
-            let r = try? CoreBridge.shared.call(["op": "chatHistory", "agent": s.agent, "cwd": s.cwd, "sessionId": s.id, "path": path], as: ChatStarted.self)
-            DispatchQueue.main.async { [self] in
-                guard isOpen, chat == nil else { return } // collapsed or moved on meanwhile
-                guard let r else { return fallback() }
-                openChat(ChatInfo(id: r.id, agent: s.agent, cwd: s.cwd, title: s.project, status: "idle", sessionId: s.id, session: s))
-            }
-        }
+        guard let r = try? CoreBridge.shared.call(["op": "chatHistory", "agent": s.agent, "cwd": s.cwd, "sessionId": s.id, "path": path], as: ChatStarted.self) else { return fallback() }
+        openChat(ChatInfo(id: r.id, agent: s.agent, cwd: s.cwd, title: s.project, status: "idle", sessionId: s.id, session: s))
     }
 
     /// The agent is working: this chat's own turn, or the history's session in its terminal or app.
@@ -407,6 +400,7 @@ extension PanelModel {
     /// A session the island didn't start takes replies only once its own process is gone, so a terminal
     /// still open on it never forks; desktop apps keep theirs, so never there.
     var canReply: Bool {
+        guard !loadingChat else { return false }
         guard let s = historySession, chatStatus != "running" else { return true }
         if s.isDesktop { return false }
         if [.ended, .stale].contains(s.state) { return true }
@@ -431,9 +425,9 @@ extension PanelModel {
             chatApproval = nil
             questionPicks = [:]
             images = []
-            loadOptions(refresh: true)
+            loadingChat = true
             chat = c
-            pollChat()
+            loadInitialTranscript(c)
             startPolling()
         }
     }
@@ -441,8 +435,9 @@ extension PanelModel {
     /// Back to the session list; not animated when the panel is collapsing.
     func closeChat(animated: Bool = true) {
         let change = { [self] in
-            // A history view is rebuilt from its file on the next open; free it unless a reply is still running.
-            if let c = chat, c.session != nil, chatStatus != "running" { _ = try? CoreBridge.shared.call(["op": "chatDelete", "id": c.id]) }
+            // The initial read owns the history until it finishes.
+            if let c = chat, c.session != nil, !loadingChat, chatStatus != "running" { discardHistory(c.id) }
+            loadingChat = false
             chat = nil
             replySettings = nil
             chatQuestion = nil
@@ -452,7 +447,7 @@ extension PanelModel {
             composing = false
             disconnected = false
             confirmingDelete = nil
-            refreshChats()
+            if initialChatLoads.isEmpty { refreshChats() }
         }
         if animated { navigate(forward: false, change) } else { change() }
     }
@@ -637,29 +632,62 @@ extension PanelModel {
         }
     }
 
+    private func discardHistory(_ id: Int) {
+        _ = try? CoreBridge.shared.call(["op": "chatDelete", "id": id])
+    }
+
+    private func loadInitialTranscript(_ c: ChatInfo) {
+        guard initialChatLoads.insert(c.id).inserted else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let transcript = try? CoreBridge.shared.call(["op": "transcript", "id": c.id, "since": 0], as: ChatTranscript.self)
+            DispatchQueue.main.async { [self] in
+                initialChatLoads.remove(c.id)
+                guard chat?.id == c.id else {
+                    if c.session != nil, let transcript, transcript.status != "running" { discardHistory(c.id) }
+                    return
+                }
+                if let transcript {
+                    applyTranscript(transcript, to: c)
+                } else {
+                    disconnected = true
+                }
+                loadingChat = false
+                loadOptions(refresh: true)
+            }
+        }
+    }
+
     func pollChat() {
-        guard let c = chat else { return }
+        guard let c = chat, !loadingChat else { return }
         do {
             let t = try CoreBridge.shared.call(["op": "transcript", "id": c.id, "since": rev], as: ChatTranscript.self)
-            if disconnected { disconnected = false }
-            if chatApproval != t.approval { chatApproval = t.approval }
-            if let next = t.plans?.last, next.status == "ready", (next.version > (plans.last?.version ?? 0) || plans.last?.status == "writing") { planFeedback = "" }
-            if plans != (t.plans ?? []) { plans = t.plans ?? [] }
-            if chat?.settings != t.settings { chat?.settings = t.settings }
-            for e in t.entries {
-                if e.index < entries.count { entries[e.index] = e } else { entries.append(e) }
-            }
-            rev = t.rev
-            if chatStatus != t.status { chatStatus = t.status }
-            if chatError != t.error { chatError = t.error }
-            if let session = t.sessionId { SessionTitles.shared.link(temporary: "chat:\(c.id)", session: "\(c.agent):\(session)") }
-            if chat?.sessionId != t.sessionId { chat?.sessionId = t.sessionId }
-            if chat?.handoff != t.handoff { chat?.handoff = t.handoff }
-            if chat?.handoffError != t.handoffError { chat?.handoffError = t.handoffError }
-            if chatQuestion != t.question { chatQuestion = t.question; questionPicks = [:] }
+            applyTranscript(t, to: c)
         } catch {
             disconnected = true
         }
+    }
+
+    private func applyTranscript(_ t: ChatTranscript, to c: ChatInfo) {
+        if disconnected { disconnected = false }
+        if chatApproval != t.approval { chatApproval = t.approval }
+        if let next = t.plans?.last, next.status == "ready", (next.version > (plans.last?.version ?? 0) || plans.last?.status == "writing") { planFeedback = "" }
+        if plans != (t.plans ?? []) { plans = t.plans ?? [] }
+        if chat?.settings != t.settings { chat?.settings = t.settings }
+        if rev == 0 && entries.isEmpty {
+            if !t.entries.isEmpty { entries = t.entries }
+        } else {
+            for e in t.entries {
+                if e.index < entries.count { entries[e.index] = e } else { entries.append(e) }
+            }
+        }
+        rev = t.rev
+        if chatStatus != t.status { chatStatus = t.status }
+        if chatError != t.error { chatError = t.error }
+        if let session = t.sessionId { SessionTitles.shared.link(temporary: "chat:\(c.id)", session: "\(c.agent):\(session)") }
+        if chat?.sessionId != t.sessionId { chat?.sessionId = t.sessionId }
+        if chat?.handoff != t.handoff { chat?.handoff = t.handoff }
+        if chat?.handoffError != t.handoffError { chat?.handoffError = t.handoffError }
+        if chatQuestion != t.question { chatQuestion = t.question; questionPicks = [:] }
     }
 
     /// The core is pulled, never pushed: fast while a chat is on screen, slow for the row statuses.
@@ -674,7 +702,7 @@ extension PanelModel {
             if self.chat != nil {
                 self.pollChat()
             }
-            if tick % 12 == 0 {
+            if tick % 12 == 0 && self.initialChatLoads.isEmpty {
                 self.refreshChats()
                 self.processHandoffs()
             }

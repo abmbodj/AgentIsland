@@ -523,7 +523,10 @@ struct History {
 fn tail(g: &mut State, agent: &str) {
     if g.status == Status::Running { return }
     let Some(h) = g.history.as_mut() else { return };
-    let Ok(mut f) = std::fs::File::open(&h.path) else { return };
+    let Ok(mut f) = std::fs::File::open(&h.path) else {
+        if g.transcript.entries.is_empty() { g.transcript.notice("History not available.") }
+        return;
+    };
     let len = f.metadata().map_or(0, |m| m.len());
     if len <= h.offset || f.seek(SeekFrom::Start(h.offset)).is_err() { return }
     let mut buf = Vec::new();
@@ -690,7 +693,7 @@ impl Chats {
         chat
     }
 
-    /// Open a hook-reported session's history from its transcript file; the same session reopens the same view.
+    /// Register a hook-reported session's history without reading its file; the same session reopens the same view.
     /// Replies resume the session headless, one turn at a time, and the session stays the agent's own.
     pub fn open_history(&self, agent: &str, cwd: &str, session_id: &str, path: &str) -> Result<u64, String> {
         if !matches!(agent, "claude" | "codex") { return Err(format!("Unknown agent {agent}")) }
@@ -701,13 +704,12 @@ impl Chats {
             return Ok(c.id);
         }
         let chat = self.make(agent, cwd, String::new(), Some(session_id.into()));
+        {
+            let mut g = chat.lock();
+            g.transcript.session_id = Some(session_id.into());
+            g.history = Some(History { path: path.into(), offset: 0 });
+        }
         list.insert(chat.id, chat.clone());
-        drop(list);
-        let mut g = chat.lock();
-        g.transcript.session_id = Some(session_id.into());
-        g.history = Some(History { path: path.into(), offset: 0 });
-        tail(&mut g, agent);
-        if g.transcript.entries.is_empty() && std::fs::File::open(path).is_err() { g.transcript.notice("History not available.") }
         Ok(chat.id)
     }
 
@@ -799,7 +801,7 @@ impl Chats {
     pub fn claim_handoffs(&self, tools: &Tools) -> Value {
         let list = self.list.lock().unwrap_or_else(|e| e.into_inner());
         let mut claims = Vec::new();
-        for chat in list.values() {
+        for chat in list.values().filter(|chat| chat.external.is_none()) {
             let mut g = chat.lock();
             if g.status == Status::Running || !g.handoff.as_ref().is_some_and(|h| h.status == "queued") {
                 continue;
@@ -960,6 +962,7 @@ impl Chats {
             if g.status == Status::Running {
                 return Err("The agent is still working.".into());
             }
+            tail(&mut g, &chat.agent);
             if let Some((version, action, feedback)) = decision {
                 g.plans.decide(version, action, feedback)?;
                 if action == "reject" { return Ok(()); }

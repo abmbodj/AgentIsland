@@ -432,6 +432,7 @@ struct ChatView: View {
     @State private var wheel: Any?
 
     private var statusText: String {
+        if model.loadingChat { return "Loading" }
         if model.disconnected { return "Disconnected" }
         if model.working { return "Working" }
         switch model.chatStatus {
@@ -493,13 +494,14 @@ struct ChatView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .disabled(c.handoff != nil || model.disconnected)
+                .disabled(c.handoff != nil || model.disconnected || model.loadingChat)
                 .accessibilityLabel("Open in…")
                 .help("Continue this conversation in another app")
                 Button { model.confirmingDelete = c.id } label: {
                     Image(systemName: "trash").font(.system(size: 12)).foregroundStyle(secondary).frame(width: 28, height: 26).contentShape(Rectangle())
                 }
                 .buttonStyle(IslandButtonStyle(radius: 6))
+                .disabled(model.loadingChat)
                 .accessibilityLabel("Delete chat")
                 .help("Delete this chat")
             }
@@ -542,6 +544,8 @@ struct ChatView: View {
                 .foregroundStyle(ink)
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.07)))
+            } else if model.loadingChat {
+                EmptyView()
             } else if model.canReply {
                 Composer(model: model, mode: .reply)
             } else if let s = model.historySession {
@@ -561,8 +565,15 @@ struct ChatView: View {
     private var messages: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if model.entries.isEmpty { empty }
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    if model.loadingChat {
+                        ProgressView("Loading conversation…")
+                            .controlSize(.small)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 60)
+                    } else if model.entries.isEmpty {
+                        empty
+                    }
                     ForEach(model.planVisibleEntries) { e in
                         if e.kind == "plan", let plan = model.plans.first(where: { $0.entryIndex == e.index }) {
                             InlinePlan(model: model, plan: plan)

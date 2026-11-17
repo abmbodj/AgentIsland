@@ -813,6 +813,20 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id
 }
 
 #[test]
+fn opening_history_defers_reading_until_the_first_transcript_request() {
+    let (_, root) = fixture("deferred-history", &[]);
+    let file = root.join("history.jsonl");
+    let message = |text| format!("{}\n", serde_json::json!({
+        "type": "user", "uuid": "u1", "message": { "role": "user", "content": text }
+    }));
+    std::fs::write(&file, message("before")).unwrap();
+    let chats = Chats::default();
+    let id = chats.open_history("claude", root.to_str().unwrap(), "history", file.to_str().unwrap()).unwrap();
+    std::fs::write(&file, message("after")).unwrap();
+    assert_eq!(chats.transcript(id, 0).unwrap()["entries"][0]["text"], "after");
+}
+
+#[test]
 fn claude_session_history_reads_the_file_tails_it_and_replies_without_duplicates() {
     // The reply resumes the session and, like the CLI, appends its turn to the same file.
     let reply = r##"read first
