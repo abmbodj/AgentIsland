@@ -38,6 +38,10 @@ struct SessionListTests {
             .init(key: claude, title: "Two", cwd: "/scratch/two", projectRoot: "/dev/Locy/", state: .idle, since: 0)
         ])
         assert(worktrees.groups.count == 1 && worktrees.groups[0].entries.count == 2)
+        let waiting = SessionList(live: [
+            .init(key: claude, title: "Waiting in the chat", cwd: "/dev/Locy", state: .needsInput, since: 42)
+        ])
+        assert(waiting.waiting.map(\.id) == [.session(claude)] && waiting.groups.isEmpty)
         print("Session list checks passed")
     }
 }

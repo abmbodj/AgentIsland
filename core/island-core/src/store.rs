@@ -905,10 +905,8 @@ impl Store {
 
     /// A row may have been replaced by a newer completion while the UI event was in flight.
     pub fn viewed_completion(&mut self, agent: &str, id: &str, since: Millis, now: Millis) {
-        if let Some(s) = self.find(agent, id) {
-            if s.state == State::Finished && s.since == since {
-                s.set(State::Idle, now);
-            }
+        if self.find(agent, id).is_some_and(|s| s.state == State::Finished && s.since == since) {
+            self.viewed(agent, id, now);
         }
     }
 

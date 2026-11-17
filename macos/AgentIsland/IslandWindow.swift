@@ -356,7 +356,8 @@ final class IslandController {
         let typing = panel.firstResponder is NSTextView
         let cmd = e.modifierFlags.contains(.command)
         let chars = e.charactersIgnoringModifiers?.lowercased() ?? ""
-        if cmd, chars == "f", model.screen == .list, model.planReader == nil, model.listRoute != .search {
+        let modifiers = e.modifierFlags.intersection([.command, .option, .control, .shift])
+        if modifiers == .command, chars == "f", model.screen == .list, model.planReader == nil, model.listRoute != .search {
             model.startSearch()
             return true
         }
@@ -365,6 +366,7 @@ final class IslandController {
             return true
         }
         if e.keyCode == 53 { // Esc
+            if model.searchFieldFocused, (panel.firstResponder as? NSTextView)?.hasMarkedText() == true { return false }
             if model.staged != nil {
                 model.undo()
             } else if model.canGoBack {
@@ -376,7 +378,7 @@ final class IslandController {
             return true
         }
         let searchKeys = model.screen == .list && model.listRoute == .search && model.planReader == nil &&
-            (!typing || model.searchFieldFocused) && e.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+            (!typing || model.searchFieldFocused) && modifiers.isEmpty
         if searchKeys, (panel.firstResponder as? NSTextView)?.hasMarkedText() != true {
             switch e.keyCode {
             case 125: model.moveSearchSelection(1); return true
@@ -449,7 +451,11 @@ final class IslandController {
 
     private func jump(_ s: SessionInfo) {
         release(s)
-        CoreBridge.shared.send(["type": "viewed", "agent": s.agent, "id": s.id])
+        if s.state == .finished {
+            model.acknowledgeCompletion(s)
+        } else {
+            CoreBridge.shared.send(["type": "viewed", "agent": s.agent, "id": s.id])
+        }
         Jumper.jump(s) { [weak self] hint in
             guard let self else { return }
             #if DEBUG
@@ -474,13 +480,16 @@ final class IslandController {
     private func reposition() {
         guard let screen = fixedScreen ?? NSScreen.main ?? NSScreen.screens.first else { return }
         let g = IslandGeometry(screen: screen)
-        guard g != geometry else { return }
-        geometry = g
         // Envelope: the drawing space for wings and the dropped-down panel, anchored at the screen top.
         let w = max(g.notch.width + 440, PanelModel.chatWidth + 80)
         let h = g.notch.height + min(IslandView.chatMaxHeight, screen.visibleFrame.height - 40)
+        let envelope = CGSize(width: w, height: h)
+        guard g != geometry || envelope != view.envelope else { return }
+        geometry = g
         envelopeOrigin = CGPoint(x: g.notch.midX - w / 2, y: screen.frame.maxY - h)
-        view.envelope = CGSize(width: w, height: h)
+        view.envelope = envelope
+        let heightLimit = min(IslandView.panelMaxHeight, h - g.notch.height)
+        if model.listHeightLimit != heightLimit { model.listHeightLimit = heightLimit }
         view.configure(notchWidth: g.notch.width, notchHeight: g.notch.height, hasNotch: g.hasNotch)
         windowRect = .zero
         render(animated: false)

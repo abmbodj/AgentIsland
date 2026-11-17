@@ -17,7 +17,7 @@ struct SessionList {
         case saved(Int)
     }
 
-    struct Live {
+    struct Live: Equatable {
         let key: SessionKey
         let title: String
         let cwd: String
@@ -26,7 +26,7 @@ struct SessionList {
         let since: Int64
     }
 
-    struct Saved {
+    struct Saved: Equatable {
         let id: Int
         let agent: String
         let session: SessionKey?
@@ -67,10 +67,10 @@ struct SessionList {
     }
 
     let entries: [Entry]
+    let waiting: [Entry]
     let running: [Entry]
     let finished: [Entry]
     let groups: [Group]
-    private let entriesByID: [ID: Entry]
 
     init(live: [Live] = [], saved: [Saved] = []) {
         var bySession: [SessionKey: Saved] = [:]
@@ -102,11 +102,11 @@ struct SessionList {
             }
             return row
         }
+        waiting = rows.filter { $0.state == .needsInput }
         running = rows.filter { $0.state == .working }
         finished = rows.filter { $0.state == .finished }.sorted { $0.since > $1.since }
-        let quiet = rows.filter { $0.state != .working && $0.state != .finished }
-        entries = running + finished + quiet
-        entriesByID = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
+        let quiet = rows.filter { $0.state != .needsInput && $0.state != .working && $0.state != .finished }
+        entries = waiting + running + finished + quiet
         groups = Dictionary(grouping: quiet, by: \.project.id).values.compactMap { rows in
             rows.first.map { Group(project: $0.project, entries: rows) }
         }.sorted {
@@ -114,8 +114,6 @@ struct SessionList {
             return comparison == .orderedSame ? $0.id < $1.id : comparison == .orderedAscending
         }
     }
-
-    subscript(id: ID) -> Entry? { entriesByID[id] }
 
     func search(_ query: String) -> [Entry] {
         let words = query.split(whereSeparator: \.isWhitespace)

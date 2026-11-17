@@ -14,7 +14,7 @@ struct SessionListView: View {
     @State private var headerHeight: CGFloat = 0
     @State private var rowsHeight: CGFloat = 0
     @State private var stripHeight: CGFloat = 0
-    private static let runningPreview = 4
+    private static let activityPreview = 4
     private static let projectPreview = 3
     fileprivate static let listViewport = "session list viewport"
 
@@ -29,7 +29,7 @@ struct SessionListView: View {
                 listHeader
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
                 // Panel padding is 4 top + 10 bottom.
-                let room = max(0, IslandView.panelMaxHeight - 14 - cardHeight - headerHeight - stripHeight)
+                let room = max(0, model.listHeightLimit - 14 - cardHeight - headerHeight - stripHeight)
                 let viewport = rowsHeight > 0 ? min(rowsHeight, room) : room
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -72,6 +72,8 @@ struct SessionListView: View {
             switch model.listRoute {
             case .activity:
                 Text("Sessions").fontWeight(.semibold)
+            case .waiting:
+                Text("Needs input (\(model.sessionList.waiting.count))").fontWeight(.semibold)
             case .running:
                 Text("Running (\(model.sessionList.running.count))").fontWeight(.semibold)
             case .project(let id):
@@ -81,8 +83,8 @@ struct SessionListView: View {
                 TextField("Search chats and projects", text: $model.searchQuery)
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
-                    .onAppear { searchFocused = model.summoned }
-                    .onChange(of: model.summoned) { _, summoned in searchFocused = summoned }
+                    .onAppear { focusSearch() }
+                    .onChange(of: model.summoned) { _, _ in focusSearch() }
                     .onChange(of: searchFocused) { _, focused in model.searchFieldFocused = focused }
                     .onDisappear { model.searchFieldFocused = false }
                     .accessibilityLabel("Search chats and projects")
@@ -103,15 +105,30 @@ struct SessionListView: View {
         .padding(.horizontal, 8)
     }
 
+    private func focusSearch() {
+        DispatchQueue.main.async {
+            searchFocused = model.summoned && model.screen == .list && model.listRoute == .search
+        }
+    }
+
     private func rows(_ now: Date, viewport: CGFloat) -> some View {
         LazyVStack(alignment: .leading, spacing: 1) {
             switch model.listRoute {
             case .activity:
+                if model.sessionList.entries.isEmpty { sectionTitle("No tracked chats") }
+                let waiting = model.sessionList.waiting
+                if !waiting.isEmpty {
+                    sectionTitle("Needs input (\(waiting.count))")
+                    ForEach(waiting.prefix(Self.activityPreview)) { entry in row(entry, now: now) }
+                    if waiting.count > Self.activityPreview {
+                        browseButton("View all \(waiting.count) waiting") { model.listRoute = .waiting }
+                    }
+                }
                 let running = model.sessionList.running
                 if !running.isEmpty {
                     sectionTitle("Running (\(running.count))")
-                    ForEach(running.prefix(Self.runningPreview)) { entry in row(entry, now: now) }
-                    if running.count > Self.runningPreview {
+                    ForEach(running.prefix(Self.activityPreview)) { entry in row(entry, now: now) }
+                    if running.count > Self.activityPreview {
                         browseButton("View all \(running.count) running") { model.listRoute = .running }
                     }
                 }
@@ -122,15 +139,18 @@ struct SessionListView: View {
                     }
                 }
                 if !model.sessionList.groups.isEmpty {
-                    sectionTitle("Saved by project")
+                    sectionTitle("By project")
                     ForEach(model.sessionList.groups) { group in projectRows(group, now: now) }
                 }
+            case .waiting:
+                if model.sessionList.waiting.isEmpty { sectionTitle("No chats need input") }
+                ForEach(model.sessionList.waiting) { entry in row(entry, now: now) }
             case .running:
                 if model.sessionList.running.isEmpty { sectionTitle("No running chats") }
                 ForEach(model.sessionList.running) { entry in row(entry, now: now) }
             case .project(let id):
                 let entries = model.sessionList.groups.first { $0.id == id }?.entries ?? []
-                if entries.isEmpty { sectionTitle("No saved chats") }
+                if entries.isEmpty { sectionTitle("No chats in this project") }
                 ForEach(entries) { entry in row(entry, now: now) }
             case .search:
                 if model.searchResults.isEmpty { sectionTitle("No matching chats") }
@@ -188,7 +208,7 @@ struct SessionListView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(IslandButtonStyle(radius: 6))
-        .accessibilityLabel("\(group.project.name), \(group.entries.count) saved chats\(group.project.hint.map { ", " + $0 } ?? "")")
+        .accessibilityLabel("\(group.project.name), \(group.entries.count) \(group.entries.count == 1 ? "chat" : "chats")\(group.project.hint.map { ", " + $0 } ?? "")")
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
         if expanded {
             ForEach(group.entries.prefix(Self.projectPreview)) { entry in row(entry, now: now).padding(.leading, 12) }
@@ -319,7 +339,8 @@ private struct SessionRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(selected ? 0.15 : hover ? 0.07 : 0)))
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(selected || hover ? 0.07 : 0)))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(secondary.opacity(selected ? 0.6 : 0), lineWidth: 1).allowsHitTesting(false))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         // A plain tap, nothing beside it: a simultaneous press-tint DragGesture swallowed the tap on the never-key panel.

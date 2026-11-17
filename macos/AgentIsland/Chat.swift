@@ -277,13 +277,17 @@ extension PanelModel {
 
     /// With no sessions and no chats there is nothing to list, so the new-chat screen is the home screen.
     var hasHistory: Bool { !snapshot.sessions.isEmpty || !chats.isEmpty }
+    var hasSessionList: Bool { hasHistory || keepsSessionList }
 
     var screen: Screen {
         if chat != nil { return .chat }
-        return composing || !hasHistory ? .compose : .list
+        return composing || !hasSessionList ? .compose : .list
     }
 
-    var canGoBack: Bool { planReader != nil || chat != nil || (composing && hasHistory) || (screen == .list && listRoute != .activity) }
+    var canGoBack: Bool {
+        planReader != nil || chat != nil || (composing && hasSessionList) ||
+            (screen == .list && listRoute != .activity)
+    }
 
     /// Slide to another screen: the direction is set first, then the change lands on the next turn
     /// of the run loop, so the outgoing screen's removal transition already knows which way to leave.
@@ -377,22 +381,50 @@ extension PanelModel {
 
     func chatFor(_ s: SessionInfo) -> ChatInfo? { chats.first { $0.agent == s.agent && $0.sessionId == s.id } }
 
+    func openListEntry(_ entry: SessionList.Entry) {
+        if listRoute == .search { searchSelection = entry.id }
+        openChat { [self] in
+            if let key = entry.session, let session = snapshot.sessions.first(where: { $0.key == key }) {
+                return resolveSessionTap(session)
+            }
+            return chats.first { chat in
+                if let id = entry.savedID, chat.id == id { return true }
+                guard let key = entry.session else { return false }
+                return chat.agent == key.agent && chat.sessionId == key.id
+            }
+        }
+    }
+
     /// A session row opens its chat, else its history from the agent's transcript; with neither it opens
     /// the plan or jumps to the terminal.
     func tap(_ s: SessionInfo) {
-        if s.state == .finished { acknowledgeCompletion(s.key, since: s.since) }
-        // The chat list is only polled while open, so a just-started chat may not be linked to its row yet.
-        if chatFor(s) == nil { refreshChats() }
-        if let c = chatFor(s) { openChat(c); return }
-        let fallback = { [self] in if s.hasPlan { openSessionPlan(s) } else { onJump(s) } }
-        guard let path = s.transcriptPath else { return fallback() }
-        openChat {
-            guard let r = try? CoreBridge.shared.call(["op": "chatHistory", "agent": s.agent, "cwd": s.cwd, "sessionId": s.id, "path": path], as: ChatStarted.self) else {
-                fallback()
-                return nil
-            }
-            return ChatInfo(id: r.id, agent: s.agent, cwd: s.cwd, title: s.project, status: "idle", sessionId: s.id, session: s)
+        openChat { [self] in
+            if let session = snapshot.sessions.first(where: { $0.key == s.key }) { return resolveSessionTap(session) }
+            return chatFor(s)
         }
+    }
+
+    private func resolveSessionTap(_ session: SessionInfo) -> ChatInfo? {
+        // The chat list is only polled while open, so a just-started chat may not be linked to its row yet.
+        if chatFor(session) == nil { refreshChats() }
+        if let chat = chatFor(session) {
+            acknowledgeCompletion(session)
+            return chat
+        }
+        guard let path = session.transcriptPath,
+              let history = try? CoreBridge.shared.call(["op": "chatHistory", "agent": session.agent, "cwd": session.cwd,
+                                                         "sessionId": session.id, "path": path], as: ChatStarted.self) else {
+            if session.hasPlan {
+                acknowledgeCompletion(session)
+                openSessionPlan(session)
+            } else {
+                onJump(session)
+            }
+            return nil
+        }
+        acknowledgeCompletion(session)
+        return ChatInfo(id: history.id, agent: session.agent, cwd: session.cwd, title: session.project, status: "idle",
+                        sessionId: session.id, session: session)
     }
 
     /// The agent is working: this chat's own turn, or the history's session in its terminal or app.

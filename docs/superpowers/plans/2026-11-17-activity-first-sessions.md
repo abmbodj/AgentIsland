@@ -9,10 +9,11 @@
 ## Constraints
 
 - Cover the current session snapshot and saved Island chats across Codex and Claude Code.
-- Show four running rows by default and three saved rows in one expanded project. Keep the six-dot notch and a separate request count.
+- Show up to four waiting and four running rows by default and three rows in one expanded project. Keep the six-dot notch and a separate request count.
 - Group by an available project root or working directory, and keep missing paths searchable.
 - Keep the panel's current size budget, keyboard focus policy, and existing row actions.
 - Use no new dependencies, launch work, background polling, or transcript reads. Users gain a bounded activity view and pay one additional action to browse older chats or the full running list. The app pays for metadata joins and search while the panel is open.
+- The open panel retains a metadata projection and row summaries that grow linearly with the tracked chat count. The projection is released on collapse. Release bundle growth comes from the compiled list rendering and grouping logic. Measure resident memory and bundle size against the existing budgets.
 
 ## Tasks
 

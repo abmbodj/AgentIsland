@@ -1161,7 +1161,7 @@ struct NewChatView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if model.hasHistory {
+            if model.hasSessionList {
                 HStack {
                     BackButton { model.goBack() }
                     Spacer(minLength: 0)
@@ -1278,7 +1278,8 @@ struct ChatRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(selected ? 0.15 : hover ? 0.07 : 0)))
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(selected || hover ? 0.07 : 0)))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(secondary.opacity(selected ? 0.6 : 0), lineWidth: 1).allowsHitTesting(false))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         .onTapGesture { if model.editingTitle == nil { openRow() } }

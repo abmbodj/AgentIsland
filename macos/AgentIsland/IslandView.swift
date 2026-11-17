@@ -139,7 +139,9 @@ final class IslandView: NSView {
     func render(snapshot: Snapshot, expanded: Bool, animated: Bool) {
         let visible = !snapshot.paused
         let sessions = visible ? snapshot.sessions : []
-        let attention = visible ? snapshot.attention : 0
+        // Managed chats can surface an inline question in the conversation instead of a queue card.
+        let inlineAttention = sessions.lazy.filter { $0.state == .needsInput && $0.pending.isEmpty }.count
+        let attention = visible ? snapshot.attention + inlineAttention : 0
         let H = envelope.height, mid = envelope.width / 2
         let notchL = mid - notchWidth / 2, notchR = mid + notchWidth / 2
         let animate = animated && !Theme.reduceMotion

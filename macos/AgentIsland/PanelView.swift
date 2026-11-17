@@ -2,7 +2,7 @@ import SwiftUI
 import Combine
 
 enum SessionListRoute: Hashable {
-    case activity, running, project(String), search
+    case activity, waiting, running, project(String), search
 }
 
 /// State shared between the island controller and the SwiftUI panel.
@@ -17,7 +17,9 @@ final class PanelModel: ObservableObject {
     @Published var openGroups: Set<SessionKey> = []
     @Published var listRoute: SessionListRoute = .activity
     @Published var expandedProject: String?
+    @Published private(set) var keepsSessionList = false
     @Published private(set) var sessionList = SessionList()
+    @Published var listHeightLimit = IslandView.panelMaxHeight
     @Published var searchQuery = "" {
         didSet { if oldValue != searchQuery { updateSearch() } }
     }
@@ -25,6 +27,8 @@ final class PanelModel: ObservableObject {
     @Published var searchSelection: SessionList.ID?
     var searchFieldFocused = false
     private var sourceBeforeSearch: SessionListRoute = .activity
+    private var listSessions: [SessionList.Live] = []
+    private var listChats: [SessionList.Saved] = []
     /// Row-level hint after a jump fell back (e.g. Automation permission declined).
     @Published var hint: [String: String] = [:]
     /// Laid-out height of the panel content, reported by SwiftUI.
@@ -44,7 +48,10 @@ final class PanelModel: ObservableObject {
                 loadingChat = false; editingTitle = nil; planReader = nil; chat = nil; entries = []; composing = false; confirmingDelete = nil
                 listRoute = .activity
                 expandedProject = nil
+                keepsSessionList = false
                 sessionList = SessionList()
+                listSessions = []
+                listChats = []
                 searchQuery = ""
                 searchResults = []
                 searchSelection = nil
@@ -133,7 +140,11 @@ final class PanelModel: ObservableObject {
         // A refresh can link several titles in one pass. Read their final values together.
         titleChanges = SessionTitles.shared.objectWillChange
             .debounce(for: .milliseconds(1), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in self?.rebuildSessionList() }
+            .sink { [weak self] _ in
+                guard let self, self.isOpen else { return }
+                self.objectWillChange.send()
+                self.rebuildSessionList()
+            }
     }
 
     private func rebuildSessionList() {
@@ -150,7 +161,11 @@ final class PanelModel: ObservableObject {
             return SessionList.Live(key: session.key, title: label, cwd: session.cwd, projectRoot: session.projectRoot,
                                     state: session.state, since: session.since)
         }
+        guard live != listSessions || saved != listChats else { return }
+        listSessions = live
+        listChats = saved
         sessionList = SessionList(live: live, saved: saved)
+        if !keepsSessionList && !sessionList.entries.isEmpty { keepsSessionList = true }
         if listRoute == .search { updateSearch() }
     }
 
@@ -187,15 +202,8 @@ final class PanelModel: ObservableObject {
         searchSelection = searchResults[min(max(0, current + delta), searchResults.count - 1)].id
     }
 
-    func openListEntry(_ entry: SessionList.Entry) {
-        if listRoute == .search { searchSelection = entry.id }
-        if let session = entry.session.flatMap({ key in snapshot.sessions.first { $0.key == key } }) {
-            tap(session)
-        } else if let saved = chats.first(where: { $0.id == entry.savedID }) {
-            openChat(saved)
-        } else {
-            rebuildSessionList()
-        }
+    func acknowledgeCompletion(_ session: SessionInfo) {
+        if session.state == .finished { acknowledgeCompletion(session.key, since: session.since) }
     }
 
     func acknowledgeCompletion(_ key: SessionKey, since: Int64) {

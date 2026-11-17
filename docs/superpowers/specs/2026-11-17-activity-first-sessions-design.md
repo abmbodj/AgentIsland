@@ -5,10 +5,10 @@ When several agents are running across projects, opening Agent Island should ans
 ## Notch and panel
 
 - Keep the notch bounded. Retain the dedicated request count and the existing six-dot limit with overflow. Give working and finished sessions priority over quiet sessions in the visible dots. Saved history alone contributes no dots.
-- Keep the existing approval and question card above the scrolling list. Its queue remains global and oldest first. A project disclosure, search query, or running-list limit cannot remove a request from that queue.
+- Keep the existing approval and question card above the scrolling list. Its queue remains global and oldest first. A project disclosure, search query, or running-list limit cannot remove a request from that queue. Sessions reporting that they need input stay above running sessions, including when the existing answer surface is inside the chat.
 - Show up to four running sessions by default, with the total and a **View all running** action when there are more. Keep their order stable while ordinary progress events arrive. Show recently finished sessions below them using the core's finished state. Keep errors and other exceptional states reachable with their existing status.
 - A finished row counts as seen after the existing dwell period only if the row is actually visible, or when the user explicitly opens or jumps to that session. Opening the panel must not clear completions below the viewport or while browsing search or history.
-- Put remaining tracked chats under collapsed project rows with saved counts. Expand one project at a time and show up to three chats inline. **Browse all** opens that project's list in the same bounded panel. The existing usage strip, composer, and session actions remain available where users expect them.
+- Put remaining tracked chats under collapsed project rows with counts. Expand one project at a time and show up to three chats inline. **Browse all** opens that project's list in the same bounded panel. The existing usage strip, composer, and session actions remain available where users expect them.
 
 ## Search and navigation
 
