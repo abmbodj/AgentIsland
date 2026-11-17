@@ -45,6 +45,8 @@ struct SessionListTests {
         let inlineQuestion = SessionList.Saved(id: 4, agent: "codex", session: codex, title: "Saved", cwd: "/dev/Locy", state: .needsInput)
         let linkedQuestion = SessionList(live: [live], saved: [inlineQuestion])
         assert(linkedQuestion.waiting.map(\.id) == [.saved(4)] && linkedQuestion.running.isEmpty)
+        let completion = SessionList.Live(key: codex, title: "Completed", cwd: "/dev/Locy", state: .finished, since: 43)
+        assert(SessionList(live: [completion], saved: [inlineQuestion]).finished.map(\.id) == [.saved(4)])
         print("Session list checks passed")
     }
 }

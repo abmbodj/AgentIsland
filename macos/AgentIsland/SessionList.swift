@@ -80,10 +80,11 @@ struct SessionList {
         let liveKeys = Set(live.map(\.key))
         let open = live.map { session in
             let chat = bySession[session.key]
+            let inlineRequest = chat?.state == .needsInput && [.idle, .working].contains(session.state)
             return Entry(id: chat.map { .saved($0.id) } ?? .session(session.key), session: session.key, savedID: chat?.id,
                          agent: session.key.agent, title: session.title,
                          project: Project(path: session.projectRoot ?? (session.cwd.isEmpty ? chat?.cwd ?? "" : session.cwd)),
-                         state: chat?.state == .needsInput ? .needsInput : session.state, since: session.since)
+                         state: inlineRequest ? .needsInput : session.state, since: session.since)
         }
         let savedOnly = saved.reversed().compactMap { chat -> Entry? in
             if let key = chat.session, liveKeys.contains(key) { return nil }

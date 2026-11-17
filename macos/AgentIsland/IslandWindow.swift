@@ -330,12 +330,13 @@ final class IslandController {
         panel.makeKeyAndOrderFront(nil) // non-activating panel: our app stays in the background
     }
 
-    func endSummon(collapse: Bool) {
+    func endSummon(collapse: Bool, restoreFocus: Bool = true) {
         guard model.summoned else { return }
         model.summoned = false
         panel.allowsKey = false
         panel.resignKey()
-        previousApp?.activate()
+        if restoreFocus { previousApp?.activate() }
+        previousApp = nil
         if collapse { setExpanded(false, pinned: false) }
     }
 
@@ -472,6 +473,7 @@ final class IslandController {
             #endif
             self.model.hint[s.id] = hint
             if hint == nil {
+                self.endSummon(collapse: false, restoreFocus: false)
                 self.setExpanded(false, pinned: false)
             } else {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 6) { self.model.hint[s.id] = nil }
