@@ -22,15 +22,17 @@ Single sans: the system font (SF Pro / Segoe UI Variable on Windows), SF Mono fo
 
 ## 4. Elevation
 
-Flat. The whole island is opaque notch black (no glass, no blur, no shadow); hierarchy inside the panel comes from text weight and faint white lifts (6–8%) for hover and inset blocks.
+Flat. The whole island is opaque notch black (no glass, no blur, no shadow); hierarchy inside the panel comes from text weight and faint white lifts. The lifts form one ladder (`Lift` in `Theme.swift`): inset 6% for rows in the flow, block 8% for contained blocks, hover and hairlines, raised 11% for resting secondary buttons and meter tracks, selected 15% for the chosen segment. Radii are one per role (`Radius`): chip 6, control 8, row 10, card 12, field 14.
 
 ## 5. Components
 
-Omitted until built (pill, session row, approval card, question card, handoff card, usage strip).
+### Usage footer
+
+Pinned under every expanded screen (list, new session, conversation), below a hairline. One row per provider, Claude Code then Codex, each named with its mark so neither reads as the other's consumption. Each limit window is a column of two lines: its name (5-hour, Weekly) with "resets …" on the first, a 4pt capsule meter (raised track, off-white fill) and the percentage left on the second. Values are the last reported ones, never extrapolated; older than 15 minutes, the reset time is replaced by "stale" and the provider name's tooltip says "As of … ago"; a provider with no report says "Not reported yet". Left ≤10% is bold, not amber. The fill moves only when the value changes.
 
 ### Chat (composer and conversation)
 
-**Entry.** The session list is status-only; a chat icon in its footer (trailing edge, beside the usage line) opens the new-chat screen: composer, Claude/Codex toggle and working folder, with Back to the list. With no sessions and no chats the panel opens on that screen by itself and keeps the "No agent sessions" prompt above the composer. Sending slides into the conversation; Back slides out.
+**Entry.** The session list is status-only; a New chat button (chat bubble and label) at the trailing end of its header opens the new-chat screen: composer, Claude/Codex toggle and working folder, with Back to the list. With no sessions and no chats the panel opens on that screen by itself and keeps the "No agent sessions" prompt above the composer. Sending slides into the conversation; Back slides out.
 
 **Motion.** Screens slide 28pt with a fade, forward from the trailing side and back from the leading side, on ease-out-quint (250ms, no bounce); the island's own shape springs to the new size underneath. Small changes (a message settling in, a tool row opening, the send/stop glyph swapping) use the same curve at 220ms; press feedback uses 120ms. Reduce Motion replaces slides with short cross-fades and applies disclosure geometry immediately. The silhouette carries position and velocity across reversals using a critically damped trajectory submitted to Core Animation; unchanged targets do not restart it. Window fitting follows the current transition’s completion. Incremental stream-follow is immediate; explicit Latest navigation uses a short transition. Undo’s countdown runs in Core Animation from the original decision deadline.
 

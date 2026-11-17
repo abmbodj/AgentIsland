@@ -43,7 +43,7 @@ final class IslandView: NSView {
     /// List mode is 440 wide; an open chat widens to `PanelModel.chatWidth`.
     private var panelWidth: CGFloat { model.width }
     /// Room below the notch for the dropped-down panel (see `IslandController.reposition`).
-    static let panelMaxHeight: CGFloat = 460
+    static let panelMaxHeight: CGFloat = 520
     /// Room below the notch when a chat is open.
     static let chatMaxHeight: CGFloat = PanelModel.chatHeight + 14
 
@@ -64,7 +64,6 @@ final class IslandView: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer = CALayer()
-
 
         let shapeView = NSView()
         shapeView.wantsLayer = true

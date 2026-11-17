@@ -58,12 +58,12 @@ struct MarkdownDocument: View {
                 case let .heading(level, text): inline(text).font(.system(size: level == 1 ? 18 : 14, weight: .semibold)).accessibilityAddTraits(.isHeader)
                 case let .paragraph(text): inline(text)
                 case let .list(marker, text): HStack(alignment: .top, spacing: 8) { Text(marker); inline(text).frame(maxWidth: .infinity, alignment: .leading) }
-                case let .quote(text): inline(text).padding(8).frame(maxWidth: .infinity, alignment: .leading).background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+                case let .quote(text): inline(text).padding(8).frame(maxWidth: .infinity, alignment: .leading).background(Color.white.opacity(Lift.inset), in: RoundedRectangle(cornerRadius: Radius.chip))
                 case let .code(language, text):
                     VStack(alignment: .leading, spacing: 5) {
                         Text(language).font(.system(size: 10)).foregroundStyle(.secondary)
                         ScrollView(.horizontal) { Text(text).font(.system(size: 12, design: .monospaced)).fixedSize(horizontal: true, vertical: false) }
-                    }.padding(8).background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 6))
+                    }.padding(8).background(Color.white.opacity(Lift.block), in: RoundedRectangle(cornerRadius: Radius.chip))
                 case let .table(rows):
                     ScrollView(.horizontal) {
                         Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 7) {
@@ -71,7 +71,7 @@ struct MarkdownDocument: View {
                                 GridRow { ForEach(row.indices, id: \.self) { column in inline(row[column]).fixedSize() } }.fontWeight(index == 0 ? .semibold : .regular)
                             }
                         }.padding(8)
-                    }.background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+                    }.background(Color.white.opacity(Lift.inset), in: RoundedRectangle(cornerRadius: Radius.chip))
                 }
             }
         }
