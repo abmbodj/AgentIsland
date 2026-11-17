@@ -502,9 +502,10 @@ private struct UsageStrip: View {
                     HStack(spacing: 6) {
                         AgentMark(agent: agent, size: 11)
                         ForEach(u.windows, id: \.label) { w in
-                            Text("\(w.label) \(Int(w.usedPercent.rounded()))%")
-                                .fontWeight(w.usedPercent >= 90 ? .bold : .regular)
-                                .foregroundStyle(w.usedPercent >= 90 ? ink : secondary)
+                            let remainingPercent = min(100, max(0, 100 - w.usedPercent))
+                            Text("\(w.label) \(Int(remainingPercent.rounded()))%")
+                                .fontWeight(remainingPercent <= 10 ? .bold : .regular)
+                                .foregroundStyle(remainingPercent <= 10 ? ink : secondary)
                             + Text(" · \(Fmt.until(w.resetsAt, now: now))").foregroundStyle(muted)
                         }
                         if now.timeIntervalSince1970 * 1000 - Double(u.observedAt) > 15 * 60 * 1000 {
@@ -519,7 +520,7 @@ private struct UsageStrip: View {
             .padding(.horizontal, 10)
             .padding(.top, 8)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Usage limits")
+            .accessibilityLabel("Usage remaining")
         }
     }
 }
