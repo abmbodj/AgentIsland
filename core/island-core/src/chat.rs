@@ -448,14 +448,12 @@ impl Transcript {
         None
     }
 
-    fn since(&self, rev: u64) -> Vec<Value> {
-        let mut out = Vec::new();
-        for (i, e) in self.entries.iter().enumerate().filter(|(_, e)| e.rev > rev) {
-            let mut v = serde_json::to_value(e).unwrap_or(Value::Null);
-            v["index"] = json!(i);
-            out.push(v);
-        }
-        out
+    fn since(&self, rev: u64) -> Vec<(usize, Entry)> {
+        if rev >= self.rev { return Vec::new(); }
+        self.entries.iter().enumerate()
+            .filter(|(_, entry)| entry.rev > rev)
+            .map(|(index, entry)| (index, entry.clone()))
+            .collect()
     }
 }
 
@@ -896,14 +894,23 @@ impl Chats {
         let chat = self.get(id)?;
         let mut g = chat.lock();
         tail(&mut g, &chat.agent);
-        Ok(json!({
+        let entries = g.transcript.since(since);
+        let mut response = json!({
             "status": g.status.name(), "error": g.error, "sessionId": g.transcript.session_id,
             "handoff": g.handoff, "handoffError": g.handoff_error, "settings": g.last,
             "question": g.question.as_ref().map(|q| &q.input),
             "approval": g.approval.as_ref().map(|a| json!({"requestId":a.request_id,"tool":a.tool,"detail":serde_json::to_string_pretty(&a.input).unwrap_or_default()})),
             "plans": g.plans.documents(),
-            "rev": g.transcript.rev, "entries": g.transcript.since(since),
-        }))
+            "rev": g.transcript.rev,
+        });
+        // Chat summaries and handoffs also need this lock. Encode rows after releasing it.
+        drop(g);
+        response["entries"] = Value::Array(entries.into_iter().map(|(index, entry)| {
+            let mut value = serde_json::to_value(entry).unwrap_or(Value::Null);
+            value["index"] = json!(index);
+            value
+        }).collect());
+        Ok(response)
     }
 
     pub fn list(&self) -> Value {
