@@ -128,6 +128,9 @@ pub struct Session {
     pub pr_offer: Option<String>,
     /// The agent's own transcript file, from its hooks, for the history view.
     pub transcript_path: Option<String>,
+    /// A custom CODEX_HOME reported by the hook, for reading the thread's name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_home: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -351,6 +354,7 @@ impl Store {
                     next_step: None,
                     pr_offer: None,
                     transcript_path: None,
+                    codex_home: None,
                 });
                 self.sessions.len() - 1
             }
@@ -364,6 +368,9 @@ impl Store {
         let agent_id = p["agent_id"].as_str();
         s.last_event = now;
         if let Some(t) = p["transcript_path"].as_str().filter(|t| !t.is_empty()) { s.transcript_path = Some(t.into()) }
+        if msg.agent == "codex" {
+            s.codex_home = msg.env.get("CODEX_HOME").filter(|home| !home.is_empty()).cloned();
+        }
         let event = p["hook_event_name"].as_str().unwrap_or_default();
         if !s.identity_locked {
             let host = s.terminal.host_session.take();

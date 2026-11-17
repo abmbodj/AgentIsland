@@ -391,6 +391,39 @@ fn codex_hook(h: &Harness, home: &std::path::Path, name: &str) -> String {
 }
 
 #[test]
+fn codex_titles_follow_the_session_index_without_another_hook() {
+    use serde_json::json;
+
+    let h = start("codex-titles");
+    let home = h.sock.parent().unwrap().join("custom-codex-home");
+    std::fs::create_dir(&home).unwrap();
+    let index = home.join("session_index.jsonl");
+    codex_hook(&h, &home, "SessionStart");
+    let snapshot = h.last();
+    let session = &snapshot["sessions"][0];
+    let id = session["id"].as_str().unwrap();
+    let lookup = |revision: &Value| h.core.call(&json!({
+        "op": "codexTitles", "threads": { (id): session["codexHome"] }, "revision": revision
+    }))["ok"].clone();
+    assert_eq!(session["codexHome"], home.to_str().unwrap());
+    let missing = lookup(&Value::Null);
+    assert_eq!(missing["titles"], json!({}), "the index may not exist yet");
+
+    let mut file = std::fs::File::create(&index).unwrap();
+    writeln!(file, "{}", json!({"id": id, "thread_name": "Original chat title"})).unwrap();
+    let original = lookup(&missing["revision"]);
+    assert_eq!(original["titles"], json!({ (id): "Original chat title" }));
+    assert_eq!(lookup(&original["revision"]), Value::Null, "an unchanged lookup has no payload");
+    writeln!(file, "{}", json!({"id": "other", "thread_name": "Unrelated chat"})).unwrap();
+    writeln!(file, "{}", json!({"id": id, "thread_name": "Updated chat title"})).unwrap();
+    writeln!(file, "{{").unwrap();
+    let renamed = lookup(&original["revision"]);
+    assert_eq!(renamed["titles"], json!({ (id): "Updated chat title" }));
+    writeln!(file, "{}", json!({"id": id, "thread_name": "  "})).unwrap();
+    assert_eq!(lookup(&renamed["revision"])["titles"], json!({}), "an empty name falls back in the panel");
+}
+
+#[test]
 fn codex_session_attaches_to_its_daemon_and_answers_inline() {
     let h = start("codex-inline");
     let home = std::path::PathBuf::from(format!("/tmp/isl-cx-{}", std::process::id())); // short: UDS paths are limited to 104 bytes

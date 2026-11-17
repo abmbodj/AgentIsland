@@ -29,6 +29,7 @@ struct SessionInfo: Decodable, Equatable, Identifiable {
     var plans: [ChatPlan]?
     /// The agent's own transcript file, for the history view.
     var transcriptPath: String?
+    var codexHome: String?
     /// Inside the Claude or Codex desktop app, which keeps the conversation to itself.
     var isDesktop: Bool {
         terminal.hostSession != nil || [Jumper.App.claudeDesktop.rawValue, Jumper.App.codexDesktop.rawValue].contains(terminal.bundleId)

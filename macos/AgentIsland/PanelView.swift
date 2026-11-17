@@ -15,8 +15,8 @@ final class PanelModel: ObservableObject {
     /// Only tick the elapsed-time clock while the panel is open.
     @Published var isOpen = false {
         didSet {
-            if isOpen && !oldValue { SessionTitles.shared.load(); refreshPRs(); refreshChats(); startPolling(); checkDiskAccess() }
-            if !isOpen { loadingChat = false; editingTitle = nil; planReader = nil; chat = nil; entries = []; composing = false; confirmingDelete = nil } // collapsing returns to the list; running chats carry on
+            if isOpen && !oldValue { SessionTitles.shared.load(); refreshPRs(); refreshChats(); refreshCodexTitles(); startPolling(); checkDiskAccess() }
+            if !isOpen { loadingChat = false; editingTitle = nil; planReader = nil; chat = nil; entries = []; composing = false; confirmingDelete = nil; codexTitles.removeAll(); codexTitleRevision = nil } // collapsing returns to the list; running chats carry on
         }
     }
     /// Open PR button state and chosen base branch, by session id.
@@ -94,6 +94,15 @@ final class PanelModel: ObservableObject {
     @Published var editingTitle: [String]?
     @Published var titleDraft = ""
     private var titleChanges: AnyCancellable?
+    @Published private var codexTitles: [String: String] = [:]
+    private var codexTitleRevision: String?
+    private var loadingCodexTitles = false
+    private let composerCodexHome = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? ""
+
+    private struct CodexTitleUpdate: Decodable {
+        let revision: String
+        let titles: [String: String]
+    }
 
     init() {
         titleChanges = SessionTitles.shared.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
@@ -108,11 +117,46 @@ final class PanelModel: ObservableObject {
     }
 
     func title(_ session: SessionInfo) -> String {
-        SessionTitles.shared.title(for: titleKeys(session), fallback: session.project)
+        let nativeTitle = session.agent == "codex" ? codexTitles[session.id] : nil
+        return SessionTitles.shared.title(for: titleKeys(session), fallback: nativeTitle ?? session.project)
     }
 
     func title(_ chat: ChatInfo) -> String {
-        SessionTitles.shared.title(for: titleKeys(chat), fallback: chat.title)
+        let nativeTitle = chat.agent == "codex" ? chat.sessionId.flatMap { codexTitles[$0] } : nil
+        return SessionTitles.shared.title(for: titleKeys(chat), fallback: nativeTitle ?? chat.title)
+    }
+
+    func refreshCodexTitles() {
+        guard isOpen, !loadingCodexTitles else { return }
+        var threads: [String: String] = [:]
+        for item in chats + [chat].compactMap({ $0 }) where item.agent == "codex" {
+            guard let id = item.sessionId else { continue }
+            threads[id] = item.session.map { $0.codexHome ?? "" } ?? composerCodexHome
+        }
+        for session in snapshot.sessions where session.agent == "codex" {
+            threads[session.id] = session.codexHome ?? ""
+        }
+        guard !threads.isEmpty else {
+            if !codexTitles.isEmpty { codexTitles.removeAll() }
+            codexTitleRevision = nil
+            return
+        }
+        loadingCodexTitles = true
+        let requested = threads
+        let revision = codexTitleRevision ?? ""
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let update = try? CoreBridge.shared.call(
+                ["op": "codexTitles", "threads": requested, "revision": revision],
+                as: CodexTitleUpdate?.self
+            )
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.loadingCodexTitles = false
+                guard self.isOpen, let update else { return }
+                self.codexTitleRevision = update.revision
+                if self.codexTitles != update.titles { self.codexTitles = update.titles }
+            }
+        }
     }
 
     func isEditingTitle(_ keys: [String]) -> Bool {

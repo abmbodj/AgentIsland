@@ -4,12 +4,12 @@ use crate::codex_appserver::Conn;
 use crate::install::{Integrations, UninstallMode};
 use crate::protocol::{HookMessage, HookReply};
 use crate::store::{Answer, Millis, Store};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Read;
 use serde_json::{json, Value};
-use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -512,6 +512,7 @@ impl Core {
             }
             "transcript" => self.chats.transcript(req["id"].as_u64().unwrap_or_default(), req["since"].as_u64().unwrap_or_default()),
             "chatList" => Ok(self.chats.list()),
+            "codexTitles" => Ok(codex_titles(&self.inner.home, &req["threads"], req["revision"].as_str())),
             "chatHistory" => {
                 let s = |k: &str| req[k].as_str().unwrap_or_default();
                 self.chats.open_history(s("agent"), s("cwd"), s("sessionId"), s("path")).map(|id| json!({"id": id}))
@@ -524,6 +525,48 @@ impl Core {
             Err(e) => json!({"error": e}),
         }
     }
+}
+
+/// Re-read the name indexes only when the requested threads or the files change.
+fn codex_titles(home: &std::path::Path, threads: &Value, previous: Option<&str>) -> Value {
+    let mut indexes = BTreeMap::<PathBuf, HashSet<&str>>::new();
+    for (id, codex_home) in threads.as_object().into_iter().flatten() {
+        let path = match codex_home.as_str() {
+            Some("") => home.join(".codex"),
+            Some(path) => PathBuf::from(path),
+            None => continue,
+        };
+        indexes.entry(path.join("session_index.jsonl")).or_default().insert(id);
+    }
+
+    let mut revision = DefaultHasher::new();
+    threads.to_string().hash(&mut revision);
+    indexes.retain(|path, _| {
+        let version = std::fs::metadata(path).ok().filter(|m| m.is_file())
+            .map(|m| (m.dev(), m.ino(), m.len(), m.modified().ok()));
+        version.hash(&mut revision);
+        version.is_some()
+    });
+    let revision = revision.finish().to_string();
+    if previous == Some(&revision) { return Value::Null }
+
+    let mut titles = serde_json::Map::new();
+    for (path, ids) in indexes {
+        let Ok(file) = std::fs::File::open(path) else { continue };
+        // Codex appends updates in order. A malformed or partial line can be skipped.
+        for line in BufReader::new(file).split(b'\n').map_while(Result::ok) {
+            let Ok(entry) = serde_json::from_slice::<Value>(&line) else { continue };
+            let Some(id) = entry["id"].as_str().filter(|id| ids.contains(id)) else { continue };
+            if let Some(name) = entry["thread_name"].as_str().map(str::trim) {
+                if name.is_empty() {
+                    titles.remove(id);
+                } else {
+                    titles.insert(id.to_string(), json!(name));
+                }
+            }
+        }
+    }
+    json!({"revision": revision, "titles": titles})
 }
 
 impl Drop for Core {
