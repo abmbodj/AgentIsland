@@ -318,7 +318,6 @@ enum Fmt {
     }
 }
 
-
 private struct HeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
@@ -327,10 +326,10 @@ private struct HeightKey: PreferenceKey {
 struct PanelView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: PanelModel
-    /// Measured so the rows get whatever height the card and usage strip leave, and scroll past that.
+    /// Measured so the rows get whatever height the header, card and usage footer leave, and scroll past that.
     @State private var cardHeight: CGFloat = 0
     @State private var rowsHeight: CGFloat = 0
-    @State private var stripHeight: CGFloat = 0
+    @State private var footerHeight: CGFloat = 0
 
     private var list: some View {
         TimelineView(.periodic(from: model.isOpen ? .now : .distantFuture, by: 1)) { ctx in
@@ -342,7 +341,7 @@ struct PanelView: View {
                 }
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0 }
                 // Panel padding is 4 top + 10 bottom.
-                let room = max(60, IslandView.panelMaxHeight - 14 - cardHeight - stripHeight)
+                let room = max(60, IslandView.panelMaxHeight - 14 - cardHeight - footerHeight)
                 ScrollView {
                     rows(ctx.date)
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowsHeight = $0 }
@@ -350,7 +349,7 @@ struct PanelView: View {
                 .frame(height: rowsHeight == 0 ? nil : min(rowsHeight, room))
                 model.usageFooter(now: ctx.date)
                     .padding(.top, 6)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stripHeight = $0 }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
             }
         }
         .staticDetailWhenReduced()

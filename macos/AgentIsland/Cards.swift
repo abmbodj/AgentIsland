@@ -1,7 +1,6 @@
 import SwiftUI
 import QuartzCore
 
-
 /// The one card that needs the user, above the session rows. Never stacked: "1 of 3" + ‹ ›.
 struct CardArea: View {
     @ObservedObject var model: PanelModel

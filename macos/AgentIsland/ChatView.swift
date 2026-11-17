@@ -1,6 +1,5 @@
 import SwiftUI
 
-
 // MARK: - Composer
 
 /// Multi-line input: Return sends, Shift+Return inserts a newline. Clicking it asks the controller for
@@ -764,7 +763,7 @@ private struct QuestionCard: View {
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: Radius.card).fill(Color.white.opacity(Lift.inset)))
-        .overlay(RoundedRectangle(cornerRadius: Radius.card).strokeBorder(Color.white.opacity(Lift.raised)))
+        .overlay(RoundedRectangle(cornerRadius: Radius.card).strokeBorder(Color.white.opacity(Lift.block)))
         .accessibilityElement(children: .contain)
     }
 }
@@ -1154,8 +1153,8 @@ struct ListHeader: View {
             Spacer(minLength: 8)
             Button { model.openCompose() } label: {
                 HStack(spacing: 5) {
-                    Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
-                    Text("New session").font(.system(size: 12, weight: .medium))
+                    Image(systemName: "bubble.left").font(.system(size: 11, weight: .medium))
+                    Text("New chat").font(.system(size: 12, weight: .medium))
                 }
                 .foregroundStyle(ink)
                 .padding(.horizontal, 10)
@@ -1164,8 +1163,8 @@ struct ListHeader: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(IslandButtonStyle(radius: Radius.control))
-            .accessibilityLabel("New session")
-            .help("Start a Claude Code or Codex session")
+            .accessibilityLabel("New chat")
+            .help("Start a Claude Code or Codex chat")
         }
         .padding(.leading, 10)
         .padding(.trailing, 2)
