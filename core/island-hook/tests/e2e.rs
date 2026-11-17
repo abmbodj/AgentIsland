@@ -393,6 +393,7 @@ fn codex_hook(h: &Harness, home: &std::path::Path, name: &str) -> String {
 #[test]
 fn codex_titles_follow_the_session_index_without_another_hook() {
     use serde_json::json;
+    use std::os::unix::fs::PermissionsExt;
 
     let h = start("codex-titles");
     let home = h.sock.parent().unwrap().join("custom-codex-home");
@@ -403,7 +404,7 @@ fn codex_titles_follow_the_session_index_without_another_hook() {
     let session = &snapshot["sessions"][0];
     let id = session["id"].as_str().unwrap();
     let lookup = |revision: &Value| h.core.call(&json!({
-        "op": "codexTitles", "threads": { (id): session["codexHome"] }, "revision": revision
+        "op": "codexTitles", "codexHome": session["codexHome"], "ids": [id], "revision": revision
     }))["ok"].clone();
     assert_eq!(session["codexHome"], home.to_str().unwrap());
     let missing = lookup(&Value::Null);
@@ -417,6 +418,11 @@ fn codex_titles_follow_the_session_index_without_another_hook() {
     writeln!(file, "{}", json!({"id": "other", "thread_name": "Unrelated chat"})).unwrap();
     writeln!(file, "{}", json!({"id": id, "thread_name": "Updated chat title"})).unwrap();
     writeln!(file, "{{").unwrap();
+    if unsafe { libc::geteuid() } != 0 {
+        file.set_permissions(std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert_eq!(lookup(&original["revision"]), Value::Null, "an unreadable index should be retried");
+        file.set_permissions(std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
     let renamed = lookup(&original["revision"]);
     assert_eq!(renamed["titles"], json!({ (id): "Updated chat title" }));
     writeln!(file, "{}", json!({"id": id, "thread_name": "  "})).unwrap();

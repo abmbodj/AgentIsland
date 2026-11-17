@@ -16,7 +16,7 @@ final class PanelModel: ObservableObject {
     @Published var isOpen = false {
         didSet {
             if isOpen && !oldValue { SessionTitles.shared.load(); refreshPRs(); refreshChats(); refreshCodexTitles(); startPolling(); checkDiskAccess() }
-            if !isOpen { loadingChat = false; editingTitle = nil; planReader = nil; chat = nil; entries = []; composing = false; confirmingDelete = nil; codexTitles.removeAll(); codexTitleRevision = nil } // collapsing returns to the list; running chats carry on
+            if !isOpen { loadingChat = false; editingTitle = nil; planReader = nil; chat = nil; entries = []; composing = false; confirmingDelete = nil; codexTitleIndexes.removeAll() } // collapsing returns to the list; running chats carry on
         }
     }
     /// Open PR button state and chosen base branch, by session id.
@@ -94,12 +94,11 @@ final class PanelModel: ObservableObject {
     @Published var editingTitle: [String]?
     @Published var titleDraft = ""
     private var titleChanges: AnyCancellable?
-    @Published private var codexTitles: [String: String] = [:]
-    private var codexTitleRevision: String?
+    @Published private var codexTitleIndexes: [String: CodexTitleIndex] = [:]
     private var loadingCodexTitles = false
     private let composerCodexHome = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? ""
 
-    private struct CodexTitleUpdate: Decodable {
+    private struct CodexTitleIndex: Decodable, Equatable {
         let revision: String
         let titles: [String: String]
     }
@@ -117,44 +116,54 @@ final class PanelModel: ObservableObject {
     }
 
     func title(_ session: SessionInfo) -> String {
-        let nativeTitle = session.agent == "codex" ? codexTitles[session.id] : nil
+        let nativeTitle = session.agent == "codex" ? codexTitleIndexes[session.codexHome ?? ""]?.titles[session.id] : nil
         return SessionTitles.shared.title(for: titleKeys(session), fallback: nativeTitle ?? session.project)
     }
 
     func title(_ chat: ChatInfo) -> String {
-        let nativeTitle = chat.agent == "codex" ? chat.sessionId.flatMap { codexTitles[$0] } : nil
+        let nativeTitle = chat.agent == "codex" ? chat.sessionId.flatMap { codexTitleIndexes[codexHome(for: chat)]?.titles[$0] } : nil
         return SessionTitles.shared.title(for: titleKeys(chat), fallback: nativeTitle ?? chat.title)
+    }
+
+    private func codexHome(for chat: ChatInfo) -> String {
+        if let session = snapshot.sessions.first(where: { $0.agent == "codex" && $0.id == chat.sessionId }) ?? chat.session {
+            return session.codexHome ?? ""
+        }
+        return composerCodexHome
     }
 
     func refreshCodexTitles() {
         guard isOpen, !loadingCodexTitles else { return }
-        var threads: [String: String] = [:]
+        var homes: [String: Set<String>] = [:]
         for item in chats + [chat].compactMap({ $0 }) where item.agent == "codex" {
             guard let id = item.sessionId else { continue }
-            threads[id] = item.session.map { $0.codexHome ?? "" } ?? composerCodexHome
+            homes[codexHome(for: item), default: []].insert(id)
         }
-        for session in snapshot.sessions where session.agent == "codex" {
-            threads[session.id] = session.codexHome ?? ""
+        for session in snapshot.sessions + [readerSession].compactMap({ $0 }) where session.agent == "codex" {
+            homes[session.codexHome ?? "", default: []].insert(session.id)
         }
-        guard !threads.isEmpty else {
-            if !codexTitles.isEmpty { codexTitles.removeAll() }
-            codexTitleRevision = nil
+        let previous = codexTitleIndexes.filter { homes[$0.key] != nil }
+        guard !homes.isEmpty else {
+            if !codexTitleIndexes.isEmpty { codexTitleIndexes.removeAll() }
             return
         }
         loadingCodexTitles = true
-        let requested = threads
-        let revision = codexTitleRevision ?? ""
+        let requested = homes
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let update = try? CoreBridge.shared.call(
-                ["op": "codexTitles", "threads": requested, "revision": revision],
-                as: CodexTitleUpdate?.self
-            )
+            var indexes = previous
+            for (home, ids) in requested {
+                if let update = try? CoreBridge.shared.call(
+                    ["op": "codexTitles", "codexHome": home, "ids": ids.sorted(), "revision": previous[home]?.revision ?? ""],
+                    as: CodexTitleIndex?.self
+                ) {
+                    indexes[home] = update
+                }
+            }
+            let refreshed = indexes
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.loadingCodexTitles = false
-                guard self.isOpen, let update else { return }
-                self.codexTitleRevision = update.revision
-                if self.codexTitles != update.titles { self.codexTitles = update.titles }
+                if self.isOpen, self.codexTitleIndexes != refreshed { self.codexTitleIndexes = refreshed }
             }
         }
     }

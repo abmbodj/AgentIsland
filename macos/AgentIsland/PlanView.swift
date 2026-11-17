@@ -85,12 +85,23 @@ struct InlinePlan: View {
 
 struct PlanReader: View {
     @ObservedObject var model: PanelModel
+
+    private var title: String {
+        if let session = model.readerSession {
+            return session.agent == "codex" ? model.title(session) : session.project
+        }
+        if let chat = model.chat {
+            return chat.agent == "codex" ? model.title(chat) : chat.title
+        }
+        return "Plan"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Button { model.goBack() } label: { Label("Back", systemImage: "chevron.left") }.buttonStyle(.borderless)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(model.readerSession?.project ?? model.chat?.title ?? "Plan").lineLimit(1).fontWeight(.semibold)
+                    Text(title).lineLimit(1).fontWeight(.semibold)
                     Text(Fmt.agentName(model.readerSession?.agent ?? model.chat?.agent ?? "claude")).font(.system(size: 10)).foregroundStyle(Color(nsColor: Theme.secondary))
                 }
                 Spacer()

@@ -4,14 +4,14 @@ use crate::codex_appserver::Conn;
 use crate::install::{Integrations, UninstallMode};
 use crate::protocol::{HookMessage, HookReply};
 use crate::store::{Answer, Millis, Store};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Read;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
@@ -512,7 +512,7 @@ impl Core {
             }
             "transcript" => self.chats.transcript(req["id"].as_u64().unwrap_or_default(), req["since"].as_u64().unwrap_or_default()),
             "chatList" => Ok(self.chats.list()),
-            "codexTitles" => Ok(codex_titles(&self.inner.home, &req["threads"], req["revision"].as_str())),
+            "codexTitles" => Ok(codex_titles(&self.inner.home, req).unwrap_or(Value::Null)),
             "chatHistory" => {
                 let s = |k: &str| req[k].as_str().unwrap_or_default();
                 self.chats.open_history(s("agent"), s("cwd"), s("sessionId"), s("path")).map(|id| json!({"id": id}))
@@ -527,34 +527,33 @@ impl Core {
     }
 }
 
-/// Re-read the name indexes only when the requested threads or the files change.
-fn codex_titles(home: &std::path::Path, threads: &Value, previous: Option<&str>) -> Value {
-    let mut indexes = BTreeMap::<PathBuf, HashSet<&str>>::new();
-    for (id, codex_home) in threads.as_object().into_iter().flatten() {
-        let path = match codex_home.as_str() {
-            Some("") => home.join(".codex"),
-            Some(path) => PathBuf::from(path),
-            None => continue,
-        };
-        indexes.entry(path.join("session_index.jsonl")).or_default().insert(id);
-    }
-
+/// Re-read a Codex home's name index only when the requested threads or the file changes.
+fn codex_titles(home: &Path, request: &Value) -> Option<Value> {
+    let codex_home = request["codexHome"].as_str().unwrap_or_default();
+    let path = if codex_home.is_empty() { home.join(".codex") } else { PathBuf::from(codex_home) };
+    let path = path.join("session_index.jsonl");
+    let metadata = match std::fs::metadata(&path) {
+        Ok(m) if m.is_file() => Some(m),
+        Ok(_) => None,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return None,
+    };
     let mut revision = DefaultHasher::new();
-    threads.to_string().hash(&mut revision);
-    indexes.retain(|path, _| {
-        let version = std::fs::metadata(path).ok().filter(|m| m.is_file())
-            .map(|m| (m.dev(), m.ino(), m.len(), m.modified().ok()));
-        version.hash(&mut revision);
-        version.is_some()
-    });
+    path.hash(&mut revision);
+    let ids = request["ids"].as_array()?;
+    for id in ids { id.as_str().hash(&mut revision); }
+    metadata.as_ref().map(|m| (m.dev(), m.ino(), m.len(), m.modified().ok())).hash(&mut revision);
     let revision = revision.finish().to_string();
-    if previous == Some(&revision) { return Value::Null }
+    if request["revision"].as_str() == Some(&revision) { return None }
 
     let mut titles = serde_json::Map::new();
-    for (path, ids) in indexes {
-        let Ok(file) = std::fs::File::open(path) else { continue };
+    if metadata.is_some() {
+        let ids: HashSet<&str> = ids.iter().filter_map(Value::as_str).collect();
+        // Keep the panel's previous revision if a file changes or becomes unreadable mid-read.
+        let file = std::fs::File::open(path).ok()?;
         // Codex appends updates in order. A malformed or partial line can be skipped.
-        for line in BufReader::new(file).split(b'\n').map_while(Result::ok) {
+        for line in BufReader::new(file).split(b'\n') {
+            let line = line.ok()?;
             let Ok(entry) = serde_json::from_slice::<Value>(&line) else { continue };
             let Some(id) = entry["id"].as_str().filter(|id| ids.contains(id)) else { continue };
             if let Some(name) = entry["thread_name"].as_str().map(str::trim) {
@@ -566,7 +565,7 @@ fn codex_titles(home: &std::path::Path, threads: &Value, previous: Option<&str>)
             }
         }
     }
-    json!({"revision": revision, "titles": titles})
+    Some(json!({"revision": revision, "titles": titles}))
 }
 
 impl Drop for Core {
