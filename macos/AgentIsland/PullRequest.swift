@@ -116,8 +116,6 @@ extension PanelModel {
     }
 }
 
-private let ink = Color(nsColor: Theme.ink)
-private let secondary = Color(nsColor: Theme.secondary)
 
 /// The Open PR control on a session row or next-step card; empty unless the branch is ready.
 /// Rows get the compact subagent-chip size (15 pt) and stay quiet; the card matches its 28 pt buttons.
@@ -245,7 +243,7 @@ private struct ChipBody<C: View>: View {
             )
             .overlay(alignment: .leading) {
                 // Hairline divider between the two halves of a split control.
-                if squared == .leading { Rectangle().fill(Color.white.opacity(0.1)).frame(width: 1).padding(.vertical, card ? 7 : 3) }
+                if squared == .leading { Rectangle().fill(Color.white.opacity(Lift.raised)).frame(width: 1).padding(.vertical, card ? 7 : 3) }
             }
             .contentShape(Rectangle())
             .onHover { hover = $0 }

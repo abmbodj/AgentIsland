@@ -79,7 +79,7 @@ struct InlinePlan: View {
             Button("Expand plan") { model.planVersion = plan.version; model.planReader = PlanReaderSource(); model.editingPlan = false }
                 .buttonStyle(.borderless)
             PlanActions(model: model, plan: plan, historical: model.plans.last(where: { $0.status != "unavailable" })?.version != plan.version)
-        }.padding(10).background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
+        }.padding(10).background(Color.white.opacity(Lift.inset), in: RoundedRectangle(cornerRadius: Radius.control))
     }
 }
 

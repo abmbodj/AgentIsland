@@ -22,11 +22,13 @@ Single sans: the system font (SF Pro / Segoe UI Variable on Windows), SF Mono fo
 
 ## 4. Elevation
 
-Flat. The whole island is opaque notch black (no glass, no blur, no shadow); hierarchy inside the panel comes from text weight and faint white lifts (6–8%) for hover and inset blocks.
+Flat. The whole island is opaque notch black (no glass, no blur, no shadow); hierarchy inside the panel comes from text weight and faint white lifts. The lifts form one ladder (`Lift` in `Theme.swift`): inset 6% for rows in the flow, block 8% for contained blocks, hover and hairlines, raised 11% for resting secondary buttons and meter tracks, selected 15% for the chosen segment. Radii are one per role (`Radius`): chip 6, control 8, row 10, card 12, field 14.
 
 ## 5. Components
 
-Omitted until built (pill, session row, approval card, question card, handoff card, usage strip).
+### Usage footer
+
+Pinned under every expanded screen (list, new session, conversation), below a hairline. One row per provider, Claude Code then Codex, each named with its mark so neither reads as the other's consumption. Each limit window is a column: its name (5-hour, Weekly), the percentage left, a 4pt capsule meter (raised track, off-white fill) and "Resets in …". Values are the last reported ones, never extrapolated; older than 15 minutes says "As of … ago"; a provider with no report says "Not reported yet". Left ≤10% is bold, not amber. The fill moves only when the value changes.
 
 ### Chat (composer and conversation)
 

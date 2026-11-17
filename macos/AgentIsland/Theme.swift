@@ -26,6 +26,34 @@ enum Theme {
     static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 }
 
+/// SwiftUI inks, shared by every screen.
+let ink = Color(nsColor: Theme.ink)
+let secondary = Color(nsColor: Theme.secondary)
+let muted = Color(nsColor: Theme.muted)
+let amber = Color(nsColor: Theme.amber)
+let green = Color(nsColor: Theme.green)
+
+/// Surface ladder: hierarchy comes from faint white lifts over notch black, never outlines, shadow or glow.
+enum Lift {
+    /// Rows that sit in the flow: tool calls, code, diff lines.
+    static let inset = 0.06
+    /// Contained blocks (messages, cards, the composer field), the hover lift on rows, hairlines.
+    static let block = 0.08
+    /// Resting fill of a secondary button, a meter track.
+    static let raised = 0.11
+    /// The selected segment, or a raised control under the pointer.
+    static let selected = 0.15
+}
+
+/// One radius per role, so nested shapes stay concentric.
+enum Radius {
+    static let chip: CGFloat = 6
+    static let control: CGFloat = 8
+    static let row: CGFloat = 10
+    static let card: CGFloat = 12
+    static let field: CGFloat = 14
+}
+
 /// Restrained, shared timings. Native shell code can use the durations directly.
 enum Motion {
     static let feedbackDuration = 0.12

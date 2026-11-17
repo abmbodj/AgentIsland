@@ -318,11 +318,6 @@ enum Fmt {
     }
 }
 
-private let ink = Color(nsColor: Theme.ink)
-private let secondary = Color(nsColor: Theme.secondary)
-private let muted = Color(nsColor: Theme.muted)
-private let amber = Color(nsColor: Theme.amber)
-private let green = Color(nsColor: Theme.green)
 
 private struct HeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
@@ -341,6 +336,7 @@ struct PanelView: View {
         TimelineView(.periodic(from: model.isOpen ? .now : .distantFuture, by: 1)) { ctx in
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 0) {
+                    ListHeader(model: model)
                     CardArea(model: model)
                     DiskAccessBanner(model: model)
                 }
@@ -352,12 +348,9 @@ struct PanelView: View {
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowsHeight = $0 }
                 }
                 .frame(height: rowsHeight == 0 ? nil : min(rowsHeight, room))
-                HStack(alignment: .center, spacing: 8) {
-                    UsageStrip(usage: model.snapshot.usage, now: ctx.date)
-                    Spacer(minLength: 0)
-                    NewChatButton(model: model).padding(.top, 8)
-                }
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stripHeight = $0 }
+                model.usageFooter(now: ctx.date)
+                    .padding(.top, 6)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stripHeight = $0 }
             }
         }
         .staticDetailWhenReduced()
@@ -478,7 +471,7 @@ private struct SessionRow: View {
                                 .foregroundStyle(open ? ink : secondary)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 1)
-                                .background(Capsule().fill(Color.white.opacity(open ? 0.14 : 0.07)))
+                                .background(Capsule().fill(Color.white.opacity(open ? Lift.selected : Lift.block)))
                         }
                         .buttonStyle(.plain)
                         .help(open ? "Hide subagents" : "Show subagents")
@@ -489,7 +482,7 @@ private struct SessionRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(hover ? 0.07 : 0)))
+        .background(RoundedRectangle(cornerRadius: Radius.row).fill(Color.white.opacity(hover ? Lift.block : 0)))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         // A plain tap, nothing beside it: a simultaneous press-tint DragGesture swallowed the tap on the never-key panel.
@@ -549,41 +542,5 @@ private struct SubagentRow: View {
         .padding(.trailing, 10)
         .padding(.vertical, 4)
         .opacity(sub.done ? 0.6 : 1)
-    }
-}
-
-/// One quiet line: last reported limits, never extrapolated; hidden when nothing reliable exists.
-private struct UsageStrip: View {
-    let usage: Usage
-    let now: Date
-
-    var body: some View {
-        let agents = [("claude", usage.claude), ("codex", usage.codex)].compactMap { n, u in u.map { (n, $0) } }
-        if !agents.isEmpty {
-            HStack(spacing: 14) {
-                ForEach(agents, id: \.0) { agent, u in
-                    HStack(spacing: 6) {
-                        AgentMark(agent: agent, size: 11)
-                        ForEach(u.windows, id: \.label) { w in
-                            let remainingPercent = min(100, max(0, 100 - w.usedPercent))
-                            Text("\(w.label) \(Int(remainingPercent.rounded()))%")
-                                .fontWeight(remainingPercent <= 10 ? .bold : .regular)
-                                .foregroundStyle(remainingPercent <= 10 ? ink : secondary)
-                            + Text(" · \(Fmt.until(w.resetsAt, now: now))").foregroundStyle(muted)
-                        }
-                        if now.timeIntervalSince1970 * 1000 - Double(u.observedAt) > 15 * 60 * 1000 {
-                            Text("as of \(Fmt.elapsed(u.observedAt, now: now)) ago").foregroundStyle(muted)
-                        }
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-            .font(.system(size: 11).monospacedDigit())
-            .lineLimit(1)
-            .padding(.horizontal, 10)
-            .padding(.top, 8)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Usage remaining")
-        }
     }
 }

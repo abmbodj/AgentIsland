@@ -16,7 +16,7 @@ struct SessionTitle: View {
                     .focused($focused)
                     .padding(.horizontal, 4)
                     .frame(minWidth: 40, minHeight: 22)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+                    .background(Color.white.opacity(Lift.block), in: RoundedRectangle(cornerRadius: 4))
                     .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color(nsColor: Theme.secondary), lineWidth: 1))
                     .onSubmit { model.saveTitle() }
                     .accessibilityLabel("Session title")
