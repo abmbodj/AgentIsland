@@ -448,14 +448,12 @@ impl Transcript {
         None
     }
 
-    fn since(&self, rev: u64) -> Vec<Value> {
-        let mut out = Vec::new();
-        for (i, e) in self.entries.iter().enumerate().filter(|(_, e)| e.rev > rev) {
-            let mut v = serde_json::to_value(e).unwrap_or(Value::Null);
-            v["index"] = json!(i);
-            out.push(v);
-        }
-        out
+    fn since(&self, rev: u64) -> Vec<(usize, Entry)> {
+        if rev >= self.rev { return Vec::new(); }
+        self.entries.iter().enumerate()
+            .filter(|(_, entry)| entry.rev > rev)
+            .map(|(index, entry)| (index, entry.clone()))
+            .collect()
     }
 }
 
@@ -523,7 +521,10 @@ struct History {
 fn tail(g: &mut State, agent: &str) {
     if g.status == Status::Running { return }
     let Some(h) = g.history.as_mut() else { return };
-    let Ok(mut f) = std::fs::File::open(&h.path) else { return };
+    let Ok(mut f) = std::fs::File::open(&h.path) else {
+        if g.transcript.entries.is_empty() { g.transcript.notice("History not available.") }
+        return;
+    };
     let len = f.metadata().map_or(0, |m| m.len());
     if len <= h.offset || f.seek(SeekFrom::Start(h.offset)).is_err() { return }
     let mut buf = Vec::new();
@@ -690,7 +691,7 @@ impl Chats {
         chat
     }
 
-    /// Open a hook-reported session's history from its transcript file; the same session reopens the same view.
+    /// Register a hook-reported session's history without reading its file; the same session reopens the same view.
     /// Replies resume the session headless, one turn at a time, and the session stays the agent's own.
     pub fn open_history(&self, agent: &str, cwd: &str, session_id: &str, path: &str) -> Result<u64, String> {
         if !matches!(agent, "claude" | "codex") { return Err(format!("Unknown agent {agent}")) }
@@ -701,13 +702,12 @@ impl Chats {
             return Ok(c.id);
         }
         let chat = self.make(agent, cwd, String::new(), Some(session_id.into()));
+        {
+            let mut g = chat.lock();
+            g.transcript.session_id = Some(session_id.into());
+            g.history = Some(History { path: path.into(), offset: 0 });
+        }
         list.insert(chat.id, chat.clone());
-        drop(list);
-        let mut g = chat.lock();
-        g.transcript.session_id = Some(session_id.into());
-        g.history = Some(History { path: path.into(), offset: 0 });
-        tail(&mut g, agent);
-        if g.transcript.entries.is_empty() && std::fs::File::open(path).is_err() { g.transcript.notice("History not available.") }
         Ok(chat.id)
     }
 
@@ -799,7 +799,7 @@ impl Chats {
     pub fn claim_handoffs(&self, tools: &Tools) -> Value {
         let list = self.list.lock().unwrap_or_else(|e| e.into_inner());
         let mut claims = Vec::new();
-        for chat in list.values() {
+        for chat in list.values().filter(|chat| chat.external.is_none()) {
             let mut g = chat.lock();
             if g.status == Status::Running || !g.handoff.as_ref().is_some_and(|h| h.status == "queued") {
                 continue;
@@ -880,18 +880,37 @@ impl Chats {
         self.list.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
     }
 
+    /// Free an external history view without stopping a resumed turn.
+    pub fn discard_history(&self, id: u64) {
+        let mut list = self.list.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(chat) = list.get(&id).filter(|chat| chat.external.is_some()).cloned() else { return };
+        let g = chat.lock();
+        if g.status != Status::Running {
+            list.remove(&id);
+        }
+    }
+
     pub fn transcript(&self, id: u64, since: u64) -> Result<Value, String> {
         let chat = self.get(id)?;
         let mut g = chat.lock();
         tail(&mut g, &chat.agent);
-        Ok(json!({
+        let entries = g.transcript.since(since);
+        let mut response = json!({
             "status": g.status.name(), "error": g.error, "sessionId": g.transcript.session_id,
             "handoff": g.handoff, "handoffError": g.handoff_error, "settings": g.last,
             "question": g.question.as_ref().map(|q| &q.input),
             "approval": g.approval.as_ref().map(|a| json!({"requestId":a.request_id,"tool":a.tool,"detail":serde_json::to_string_pretty(&a.input).unwrap_or_default()})),
             "plans": g.plans.documents(),
-            "rev": g.transcript.rev, "entries": g.transcript.since(since),
-        }))
+            "rev": g.transcript.rev,
+        });
+        // Chat summaries and handoffs also need this lock. Encode rows after releasing it.
+        drop(g);
+        response["entries"] = Value::Array(entries.into_iter().map(|(index, entry)| {
+            let mut value = serde_json::to_value(entry).unwrap_or(Value::Null);
+            value["index"] = json!(index);
+            value
+        }).collect());
+        Ok(response)
     }
 
     pub fn list(&self) -> Value {
@@ -960,6 +979,7 @@ impl Chats {
             if g.status == Status::Running {
                 return Err("The agent is still working.".into());
             }
+            tail(&mut g, &chat.agent);
             if let Some((version, action, feedback)) = decision {
                 g.plans.decide(version, action, feedback)?;
                 if action == "reject" { return Ok(()); }

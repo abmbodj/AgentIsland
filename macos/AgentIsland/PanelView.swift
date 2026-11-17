@@ -16,7 +16,7 @@ final class PanelModel: ObservableObject {
     @Published var isOpen = false {
         didSet {
             if isOpen && !oldValue { SessionTitles.shared.load(); refreshPRs(); refreshChats(); startPolling(); checkDiskAccess() }
-            if !isOpen { editingTitle = nil; planReader = nil; chat = nil; entries = []; composing = false; confirmingDelete = nil } // collapsing returns to the list; running chats carry on
+            if !isOpen { loadingChat = false; editingTitle = nil; planReader = nil; chat = nil; entries = []; composing = false; confirmingDelete = nil } // collapsing returns to the list; running chats carry on
         }
     }
     /// Open PR button state and chosen base branch, by session id.
@@ -71,6 +71,8 @@ final class PanelModel: ObservableObject {
     @Published var options: [String: AgentOptions] = [:]
     /// The open conversation's choices once changed there; nil means the chat's last settings.
     @Published var replySettings: TurnSettings?
+    @Published var loadingChat = false
+    var initialChatLoads: Set<Int> = []
     var rev = 0
     var pollTimer: Timer?
     var onJump: (SessionInfo) -> Void = { _ in }
