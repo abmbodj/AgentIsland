@@ -82,7 +82,6 @@ final class IslandController {
     private var pointerInside = false
     private var openTimer: DispatchWorkItem?
     private var closeTimer: DispatchWorkItem?
-    private var viewedTimer: DispatchWorkItem?
     private var monitors: [Any] = []
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var bound: Set<String> = []
@@ -115,7 +114,8 @@ final class IslandController {
         model.onCommitted = { [weak self] in
             // After the last answer, hand the keyboard back (D8).
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                guard let self, self.model.summoned, self.model.chat == nil, self.model.cards.isEmpty else { return }
+                guard let self, self.model.summoned, self.model.chat == nil,
+                      self.model.listRoute == .activity, self.model.cards.isEmpty else { return }
                 self.endSummon(collapse: true)
             }
         }
@@ -156,7 +156,9 @@ final class IslandController {
             try? JSONSerialization.data(withJSONObject: state, options: .prettyPrinted).write(to: URL(fileURLWithPath: path))
         }))
         observers.append((dnc, dnc.addObserver(forName: Self.debugName("openGroup"), object: nil, queue: .main) { [weak self] n in
-            if let id = n.object as? String { self?.model.openGroups.insert(id) }
+            if let id = n.object as? String, let session = self?.snapshot.sessions.first(where: { $0.id == id }) {
+                self?.model.openGroups.insert(session.key)
+            }
         }))
         observers.append((dnc, dnc.addObserver(forName: Self.debugName("respond"), object: nil, queue: .main) { [weak self] n in
             guard let self, let what = n.object as? String else { return }
@@ -229,7 +231,10 @@ final class IslandController {
         if !gone.isEmpty {
             Jumper.forgetGhostty(gone)
             bound.subtract(gone)
-            model.openGroups.subtract(gone)
+        }
+        if !model.openGroups.isEmpty {
+            let currentGroups = model.openGroups.intersection(snap.sessions.map(\.key))
+            if currentGroups != model.openGroups { model.openGroups = currentGroups }
         }
         snapshot = snap
         model.snapshot = snap
@@ -259,7 +264,6 @@ final class IslandController {
             if !pinned && !pointerInside { setExpanded(false, pinned: false); return }
         }
         render(animated: true)
-        if expanded { scheduleViewed() }
     }
 
     /// A chat made here shows its own questions in the conversation, so they get no card and don't open the island.
@@ -283,11 +287,14 @@ final class IslandController {
         openTimer?.cancel()
         closeTimer?.cancel()
         pinned = on && pin
-        if !on { autoOpened = false; model.closeChat(animated: false) }
+        if !on {
+            endSummon(collapse: false)
+            autoOpened = false
+            model.closeChat(animated: false)
+        }
         guard on != expanded else { render(animated: true); return }
         expanded = on
         render(animated: true)
-        if on { scheduleViewed() } else { viewedTimer?.cancel() }
     }
 
     private func clicked() {
@@ -323,12 +330,13 @@ final class IslandController {
         panel.makeKeyAndOrderFront(nil) // non-activating panel: our app stays in the background
     }
 
-    func endSummon(collapse: Bool) {
+    func endSummon(collapse: Bool, restoreFocus: Bool = true) {
         guard model.summoned else { return }
         model.summoned = false
         panel.allowsKey = false
         panel.resignKey()
-        previousApp?.activate()
+        if restoreFocus { previousApp?.activate() }
+        previousApp = nil
         if collapse { setExpanded(false, pinned: false) }
     }
 
@@ -353,20 +361,38 @@ final class IslandController {
         let typing = panel.firstResponder is NSTextView
         let cmd = e.modifierFlags.contains(.command)
         let chars = e.charactersIgnoringModifiers?.lowercased() ?? ""
+        let modifiers = e.modifierFlags.intersection([.command, .option, .control, .shift])
+        if modifiers == .command, chars == "f", model.screen == .list, model.planReader == nil, model.listRoute != .search {
+            model.startSearch()
+            return true
+        }
         if cmd, chars == "[", model.canGoBack { // ⌘[ : back to the session list
             model.goBack()
             return true
         }
         if e.keyCode == 53 { // Esc
+            if model.searchFieldFocused, (panel.firstResponder as? NSTextView)?.hasMarkedText() == true { return false }
             if model.staged != nil {
                 model.undo()
             } else if model.canGoBack {
                 // Inside a chat Esc steps back, but never throws away a draft.
-                if model.planReader != nil || model.draft.isEmpty { model.goBack() } else { endSummon(collapse: false) }
+                if model.screen == .list || model.planReader != nil || model.draft.isEmpty { model.goBack() } else { endSummon(collapse: false) }
             } else {
                 endSummon(collapse: true)
             }
             return true
+        }
+        let searchKeys = model.screen == .list && model.listRoute == .search && model.planReader == nil &&
+            (!typing || model.searchFieldFocused) && modifiers.isEmpty
+        if searchKeys, (panel.firstResponder as? NSTextView)?.hasMarkedText() != true {
+            switch e.keyCode {
+            case 125: model.moveSearchSelection(1); return true
+            case 126: model.moveSearchSelection(-1); return true
+            case 36, 76:
+                if let entry = model.searchResults.first(where: { $0.id == model.searchSelection }) { model.openListEntry(entry) }
+                return true
+            default: break
+            }
         }
         guard let (_, item) = model.current else {
             return false
@@ -414,20 +440,6 @@ final class IslandController {
         }
     }
 
-    /// Finished turns count as seen once their rows have been on screen for 1.5 s (D17).
-    private func scheduleViewed() {
-        viewedTimer?.cancel()
-        guard snapshot.sessions.contains(where: { $0.state == .finished }) else { return }
-        let w = DispatchWorkItem { [weak self] in
-            guard let self, self.expanded else { return }
-            for s in self.snapshot.sessions where s.state == .finished {
-                CoreBridge.shared.send(["type": "viewed", "agent": s.agent, "id": s.id])
-            }
-        }
-        viewedTimer = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: w)
-    }
-
     /// Hand held-while-away requests back to the agent's own prompt.
     private func release(_ s: SessionInfo) {
         for a in s.pending where a.held && a.releasable {
@@ -444,7 +456,11 @@ final class IslandController {
 
     private func jump(_ s: SessionInfo) {
         release(s)
-        CoreBridge.shared.send(["type": "viewed", "agent": s.agent, "id": s.id])
+        if s.state == .finished {
+            model.acknowledgeCompletion(s)
+        } else {
+            CoreBridge.shared.send(["type": "dismissNextStep", "agent": s.agent, "id": s.id])
+        }
         Jumper.jump(s) { [weak self] hint in
             guard let self else { return }
             #if DEBUG
@@ -457,6 +473,7 @@ final class IslandController {
             #endif
             self.model.hint[s.id] = hint
             if hint == nil {
+                self.endSummon(collapse: false, restoreFocus: false)
                 self.setExpanded(false, pinned: false)
             } else {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 6) { self.model.hint[s.id] = nil }
@@ -469,13 +486,16 @@ final class IslandController {
     private func reposition() {
         guard let screen = fixedScreen ?? NSScreen.main ?? NSScreen.screens.first else { return }
         let g = IslandGeometry(screen: screen)
-        guard g != geometry else { return }
-        geometry = g
         // Envelope: the drawing space for wings and the dropped-down panel, anchored at the screen top.
         let w = max(g.notch.width + 440, PanelModel.chatWidth + 80)
         let h = g.notch.height + min(IslandView.chatMaxHeight, screen.visibleFrame.height - 40)
+        let envelope = CGSize(width: w, height: h)
+        guard g != geometry || envelope != view.envelope else { return }
+        geometry = g
         envelopeOrigin = CGPoint(x: g.notch.midX - w / 2, y: screen.frame.maxY - h)
-        view.envelope = CGSize(width: w, height: h)
+        view.envelope = envelope
+        let heightLimit = min(IslandView.panelMaxHeight, h - g.notch.height)
+        if model.listHeightLimit != heightLimit { model.listHeightLimit = heightLimit }
         view.configure(notchWidth: g.notch.width, notchHeight: g.notch.height, hasNotch: g.hasNotch)
         windowRect = .zero
         render(animated: false)

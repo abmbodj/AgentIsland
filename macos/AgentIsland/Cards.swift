@@ -170,14 +170,23 @@ private struct CardView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 7) {
+        let title = model.title(session)
+        let project = model.sessionList.entries.first { $0.session == session.key }?.project
+        return HStack(spacing: 7) {
             AgentBadge(agent: session.agent, state: .needsInput, size: 13)
                 .frame(width: 15, height: 15)
                 .accessibilityValue("Needs your input")
-            Text(model.title(session))
+            Text(title)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(ink)
                 .lineLimit(1)
+            if let project, project.hint != nil || project.name != title {
+                Text(project.hint ?? project.name)
+                    .font(.system(size: 11))
+                    .foregroundStyle(secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             if let sub = item.subagent {
                 Text("\(sub) subagent")
                     .font(.system(size: 12))

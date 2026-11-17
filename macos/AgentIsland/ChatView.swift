@@ -1161,7 +1161,7 @@ struct NewChatView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if model.hasHistory {
+            if model.hasSessionList {
                 HStack {
                     BackButton { model.goBack() }
                     Spacer(minLength: 0)
@@ -1236,21 +1236,18 @@ struct DeleteConfirm: View {
 struct ChatRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let chat: ChatInfo
+    let state: SessionState
+    let context: String?
+    let selected: Bool
     @ObservedObject var model: PanelModel
+    let openRow: () -> Void
     @State private var hover = false
 
-    private var state: SessionState {
-        switch chat.status {
-        case "running": return .working
-        case "failed": return .error
-        default: return .idle
-        }
-    }
-
     private var status: String {
-        switch chat.status {
-        case "running": return "Working"
-        case "failed": return "Failed"
+        switch state {
+        case .working: return "Working"
+        case .error: return "Failed"
+        case .needsInput: return "Needs your input"
         default: return "Idle"
         }
     }
@@ -1260,7 +1257,9 @@ struct ChatRow: View {
             AgentBadge(agent: chat.agent, state: state, size: 16).frame(width: 18, height: 18)
             VStack(alignment: .leading, spacing: 2) {
                 SessionTitle(model: model, keys: model.titleKeys(chat), title: model.title(chat))
-                Text(status).font(.system(size: 11)).foregroundStyle(secondary)
+                Text(status + (context.map { " · " + $0 } ?? "")).font(.system(size: 11))
+                    .foregroundStyle(state == .needsInput ? amber : secondary)
+                    .lineLimit(1).truncationMode(.middle)
             }
             Spacer(minLength: 8)
             Button { model.confirmingDelete = chat.id } label: {
@@ -1274,16 +1273,19 @@ struct ChatRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(hover ? 0.07 : 0)))
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(selected || hover ? 0.07 : 0)))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(secondary.opacity(selected ? 0.6 : 0), lineWidth: 1).allowsHitTesting(false))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
-        .onTapGesture { if model.editingTitle == nil { model.openChat(chat) } }
+        .onTapGesture { if model.editingTitle == nil { openRow() } }
         .contextMenu {
             Button("Rename session") { model.editTitle(keys: model.titleKeys(chat), title: model.title(chat)) }
             Button("Delete chat") { model.confirmingDelete = chat.id }
         }
         .accessibilityElement(children: model.isEditingTitle(model.titleKeys(chat)) ? .contain : .combine)
         .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityAction { if model.editingTitle == nil { openRow() } }
         .accessibilityHint("Opens this conversation")
         .accessibilityActions {
             Button("Rename session") { model.editTitle(keys: model.titleKeys(chat), title: model.title(chat)) }

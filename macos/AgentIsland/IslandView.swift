@@ -29,8 +29,8 @@ final class IslandView: NSView {
     }
 
     // Collapsed glyphs.
-    private var dots: [String: CALayer] = [:]
-    private var styled: [String: String] = [:]
+    private var dots: [SessionKey: CALayer] = [:]
+    private var styled: [SessionKey: String] = [:]
     private let overflow = CATextLayer()
     private let attentionDot = CALayer()
     private let attentionCount = CATextLayer()
@@ -139,7 +139,9 @@ final class IslandView: NSView {
     func render(snapshot: Snapshot, expanded: Bool, animated: Bool) {
         let visible = !snapshot.paused
         let sessions = visible ? snapshot.sessions : []
-        let attention = visible ? snapshot.attention : 0
+        // Managed chats can surface an inline question in the conversation instead of a queue card.
+        let inlineAttention = sessions.lazy.filter { $0.state == .needsInput && $0.pending.isEmpty }.count
+        let attention = visible ? snapshot.attention + inlineAttention : 0
         let H = envelope.height, mid = envelope.width / 2
         let notchL = mid - notchWidth / 2, notchR = mid + notchWidth / 2
         let animate = animated && !Theme.reduceMotion
@@ -147,7 +149,11 @@ final class IslandView: NSView {
         self.expanded = expanded && visible
 
         // Collapsed wings.
-        let shown = Array(sessions.prefix(maxDots))
+        var shown = Array(sessions.lazy.filter { $0.state == .finished }.prefix(maxDots))
+        shown.append(contentsOf: sessions.lazy.filter { $0.state == .working }.prefix(maxDots - shown.count))
+        shown.append(contentsOf: sessions.lazy.filter {
+            $0.state != .finished && $0.state != .working
+        }.prefix(maxDots - shown.count))
         let extra = sessions.count - shown.count
         var right: CGFloat = 0
         if !shown.isEmpty {
@@ -223,7 +229,7 @@ final class IslandView: NSView {
 
     private func layoutPill(shown: [SessionInfo], extra: Int, attention: Int, leftEdge: CGFloat, notchR: CGFloat, H: CGFloat) {
         let y = H - notchHeight
-        let ids = Set(shown.map(\.id))
+        let ids = Set(shown.map(\.key))
         for (id, l) in dots where !ids.contains(id) {
             l.removeFromSuperlayer()
             dots[id] = nil
@@ -232,16 +238,16 @@ final class IslandView: NSView {
         let left = attention > 0 ? pad * 2 + dot + 4 + Self.countWidth(attention) : 0
         var x = (hasNotch ? notchR : leftEdge + left) + pad
         for s in shown {
-            let l = dots[s.id] ?? {
+            let l = dots[s.key] ?? {
                 let l = CALayer()
                 pill.addSublayer(l)
-                dots[s.id] = l
+                dots[s.key] = l
                 return l
             }()
             let key = "\(s.agent)/\(s.state.rawValue)/\(Theme.reduceMotion)"
-            if styled[s.id] != key {
+            if styled[s.key] != key {
                 Glyph.style(l, agent: s.agent, state: s.state, size: dot)
-                styled[s.id] = key
+                styled[s.key] = key
             }
             l.frame = CGRect(x: x, y: y + (notchHeight - dot) / 2, width: dot, height: dot)
             x += dot + gap

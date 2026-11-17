@@ -620,6 +620,7 @@ impl Chat {
         json!({
             "id": self.id, "agent": self.agent, "cwd": self.cwd, "title": self.title,
             "status": g.status.name(), "sessionId": g.transcript.session_id, "error": g.error,
+            "needsInput": g.question.is_some() || g.approval.is_some(),
             "handoff": g.handoff, "handoffError": g.handoff_error, "settings": g.last,
         })
     }

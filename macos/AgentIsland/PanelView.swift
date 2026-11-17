@@ -1,13 +1,34 @@
 import SwiftUI
 import Combine
 
+enum SessionListRoute: Hashable {
+    case activity, waiting, running, project(String), search
+}
+
 /// State shared between the island controller and the SwiftUI panel.
 final class PanelModel: ObservableObject {
     @Published var snapshot = Snapshot() {
-        didSet { updatePRs(old: oldValue) }
+        didSet {
+            updatePRs(old: oldValue)
+            if snapshot.sessions != oldValue.sessions { rebuildSessionList() }
+        }
     }
     /// Parent sessions whose subagents are shown (collapsed by default).
-    @Published var openGroups: Set<String> = []
+    @Published var openGroups: Set<SessionKey> = []
+    @Published var listRoute: SessionListRoute = .activity
+    @Published var expandedProject: String?
+    @Published private(set) var keepsSessionList = false
+    @Published private(set) var sessionList = SessionList()
+    @Published var listHeightLimit = IslandView.panelMaxHeight
+    @Published var searchQuery = "" {
+        didSet { if oldValue != searchQuery { updateSearch() } }
+    }
+    @Published private(set) var searchResults: [SessionList.Entry] = []
+    @Published var searchSelection: SessionList.ID?
+    var searchFieldFocused = false
+    private var sourceBeforeSearch: SessionListRoute = .activity
+    private var listSessions: [SessionList.Live] = []
+    private var listChats: [SessionList.Saved] = []
     /// Row-level hint after a jump fell back (e.g. Automation permission declined).
     @Published var hint: [String: String] = [:]
     /// Laid-out height of the panel content, reported by SwiftUI.
@@ -15,8 +36,28 @@ final class PanelModel: ObservableObject {
     /// Only tick the elapsed-time clock while the panel is open.
     @Published var isOpen = false {
         didSet {
-            if isOpen && !oldValue { SessionTitles.shared.load(); refreshPRs(); refreshChats(); refreshCodexTitles(); startPolling(); checkDiskAccess() }
-            if !isOpen { loadingChat = false; editingTitle = nil; planReader = nil; chat = nil; entries = []; composing = false; confirmingDelete = nil; codexTitleIndexes.removeAll() } // collapsing returns to the list; running chats carry on
+            if isOpen && !oldValue {
+                SessionTitles.shared.load()
+                refreshPRs()
+                refreshChats()
+                refreshCodexTitles()
+                rebuildSessionList()
+                startPolling()
+                checkDiskAccess()
+            }
+            if !isOpen && oldValue {
+                loadingChat = false; editingTitle = nil; planReader = nil; chat = nil; entries = []; composing = false; confirmingDelete = nil
+                listRoute = .activity
+                expandedProject = nil
+                keepsSessionList = false
+                sessionList = SessionList()
+                listSessions = []
+                listChats = []
+                searchQuery = ""
+                searchResults = []
+                searchSelection = nil
+                codexTitleIndexes.removeAll()
+            }
         }
     }
     /// Open PR button state and chosen base branch, by session id.
@@ -35,7 +76,9 @@ final class PanelModel: ObservableObject {
     @Published var answered: [UInt64: [String: String]] = [:]
     @Published var freeText = ""
     // Composer chats (see Chat.swift). `chat` is the open conversation; nil shows the session list.
-    @Published var chats: [ChatInfo] = []
+    @Published var chats: [ChatInfo] = [] {
+        didSet { if chats != oldValue { rebuildSessionList() } }
+    }
     @Published var chat: ChatInfo?
     @Published var chatApproval: ChatPermission?
     @Published var plans: [ChatPlan] = []
@@ -94,7 +137,9 @@ final class PanelModel: ObservableObject {
     @Published var editingTitle: [String]?
     @Published var titleDraft = ""
     private var titleChanges: AnyCancellable?
-    @Published private var codexTitleIndexes: [String: CodexTitleIndex] = [:]
+    @Published private var codexTitleIndexes: [String: CodexTitleIndex] = [:] {
+        didSet { rebuildSessionList() }
+    }
     private var loadingCodexTitles = false
     private let composerCodexHome = ProcessInfo.processInfo.environment["CODEX_HOME"]
     private let defaultCodexHome = (CoreBridge.home as NSString).appendingPathComponent(".codex")
@@ -105,11 +150,94 @@ final class PanelModel: ObservableObject {
     }
 
     init() {
-        titleChanges = SessionTitles.shared.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        // A refresh can link several titles in one pass. Read their final values together.
+        titleChanges = SessionTitles.shared.objectWillChange
+            .debounce(for: .milliseconds(1), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, self.isOpen else { return }
+                self.objectWillChange.send()
+                self.rebuildSessionList()
+            }
+    }
+
+    private func rebuildSessionList() {
+        guard isOpen else { return }
+        let codexSessions = Dictionary(uniqueKeysWithValues: snapshot.sessions.lazy
+            .filter { $0.agent == "codex" }.map { ($0.id, $0) })
+        var savedBySession: [SessionKey: ChatInfo] = [:]
+        let saved = chats.map { chat in
+            let key = chat.sessionId.map { SessionKey(agent: chat.agent, id: $0) }
+            if let key, savedBySession[key] == nil { savedBySession[key] = chat }
+            let state: SessionState
+            if chat.needsInput == true { state = .needsInput }
+            else if chat.status == "running" { state = .working }
+            else if chat.status == "failed" { state = .error }
+            else { state = .idle }
+            let session = chat.sessionId.flatMap { codexSessions[$0] }
+            return SessionList.Saved(id: chat.id, agent: chat.agent, session: key, title: title(chat, codexSession: session),
+                                     cwd: chat.cwd, state: state)
+        }
+        let live = snapshot.sessions.map { session in
+            let label = title(session, saved: savedBySession[session.key])
+            return SessionList.Live(key: session.key, title: label, cwd: session.cwd, projectRoot: session.projectRoot,
+                                    state: session.state, since: session.since)
+        }
+        guard live != listSessions || saved != listChats else { return }
+        listSessions = live
+        listChats = saved
+        sessionList = SessionList(live: live, saved: saved)
+        if !keepsSessionList && !sessionList.entries.isEmpty { keepsSessionList = true }
+        if listRoute == .search { updateSearch() }
+    }
+
+    func startSearch() {
+        guard screen == .list, planReader == nil, listRoute != .search else { return }
+        sourceBeforeSearch = listRoute
+        listRoute = .search
+        updateSearch()
+        onSummon()
+    }
+
+    func leaveListRoute() {
+        let destination = listRoute == .search ? sourceBeforeSearch : .activity
+        listRoute = destination
+        searchQuery = ""
+        searchResults = []
+        searchSelection = nil
+        confirmingDelete = nil
+    }
+
+    private func updateSearch() {
+        guard listRoute == .search else { return }
+        let previous = searchResults.first { $0.id == searchSelection }
+        searchResults = sessionList.search(searchQuery)
+        if !searchResults.contains(where: { $0.id == searchSelection }) {
+            searchSelection = previous?.session.flatMap { key in searchResults.first { $0.session == key }?.id }
+                ?? searchResults.first?.id
+        }
+    }
+
+    func moveSearchSelection(_ delta: Int) {
+        guard !searchResults.isEmpty else { return }
+        let current = searchResults.firstIndex { $0.id == searchSelection } ?? 0
+        searchSelection = searchResults[min(max(0, current + delta), searchResults.count - 1)].id
+    }
+
+    func acknowledgeCompletion(_ session: SessionInfo) {
+        if session.state == .finished { acknowledgeCompletion(session.key, since: session.since) }
+    }
+
+    func acknowledgeCompletion(_ key: SessionKey, since: Int64) {
+        guard snapshot.sessions.contains(where: { $0.key == key && $0.state == .finished && $0.since == since }) else { return }
+        CoreBridge.shared.send(["type": "viewed", "agent": key.agent, "id": key.id, "finishedSince": since])
     }
 
     func titleKeys(_ session: SessionInfo) -> [String] {
-        ["\(session.agent):\(session.id)"] + (chatFor(session).map { ["chat:\($0.id)"] } ?? [])
+        titleKeys(session, saved: chatFor(session))
+    }
+
+    private func titleKeys(_ session: SessionInfo, saved: ChatInfo?) -> [String] {
+        ["\(session.agent):\(session.id)"] + (saved.map { ["chat:\($0.id)"] } ?? [])
     }
 
     func titleKeys(_ chat: ChatInfo) -> [String] {
@@ -117,17 +245,33 @@ final class PanelModel: ObservableObject {
     }
 
     func title(_ session: SessionInfo) -> String {
+        title(session, saved: chatFor(session))
+    }
+
+    private func title(_ session: SessionInfo, saved: ChatInfo?) -> String {
         let nativeTitle = session.agent == "codex" ? codexTitleIndexes[codexHome(for: session)]?.titles[session.id] : nil
-        return SessionTitles.shared.title(for: titleKeys(session), fallback: nativeTitle ?? session.project)
+        return SessionTitles.shared.title(for: titleKeys(session, saved: saved), fallback: nativeTitle ?? saved?.title ?? session.project)
     }
 
     func title(_ chat: ChatInfo) -> String {
-        let nativeTitle = chat.agent == "codex" ? chat.sessionId.flatMap { codexTitleIndexes[codexHome(for: chat)]?.titles[$0] } : nil
+        let session = chat.agent == "codex" ? snapshot.sessions.first { $0.agent == "codex" && $0.id == chat.sessionId } : nil
+        return title(chat, codexSession: session)
+    }
+
+    private func title(_ chat: ChatInfo, codexSession: SessionInfo?) -> String {
+        let nativeTitle = chat.agent == "codex" ? chat.sessionId.flatMap {
+            codexTitleIndexes[codexHome(for: chat, session: codexSession)]?.titles[$0]
+        } : nil
         return SessionTitles.shared.title(for: titleKeys(chat), fallback: nativeTitle ?? chat.title)
     }
 
     private func codexHome(for chat: ChatInfo) -> String {
-        if let session = snapshot.sessions.first(where: { $0.agent == "codex" && $0.id == chat.sessionId }) ?? chat.session {
+        let session = snapshot.sessions.first { $0.agent == "codex" && $0.id == chat.sessionId }
+        return codexHome(for: chat, session: session)
+    }
+
+    private func codexHome(for chat: ChatInfo, session: SessionInfo?) -> String {
+        if let session = session ?? chat.session {
             return codexHome(for: session)
         }
         return resolvedCodexHome(composerCodexHome, cwd: chat.cwd)
@@ -318,12 +462,6 @@ enum Fmt {
     }
 }
 
-private let ink = Color(nsColor: Theme.ink)
-private let secondary = Color(nsColor: Theme.secondary)
-private let muted = Color(nsColor: Theme.muted)
-private let amber = Color(nsColor: Theme.amber)
-private let green = Color(nsColor: Theme.green)
-
 private struct HeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
@@ -332,43 +470,12 @@ private struct HeightKey: PreferenceKey {
 struct PanelView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: PanelModel
-    /// Measured so the rows get whatever height the card and usage strip leave, and scroll past that.
-    @State private var cardHeight: CGFloat = 0
-    @State private var rowsHeight: CGFloat = 0
-    @State private var stripHeight: CGFloat = 0
-
-    private var list: some View {
-        TimelineView(.periodic(from: model.isOpen ? .now : .distantFuture, by: 1)) { ctx in
-            VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 0) {
-                    CardArea(model: model)
-                    DiskAccessBanner(model: model)
-                }
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0 }
-                // Panel padding is 4 top + 10 bottom.
-                let room = max(60, IslandView.panelMaxHeight - 14 - cardHeight - stripHeight)
-                ScrollView {
-                    rows(ctx.date)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowsHeight = $0 }
-                }
-                .frame(height: rowsHeight == 0 ? nil : min(rowsHeight, room))
-                HStack(alignment: .center, spacing: 8) {
-                    UsageStrip(usage: model.snapshot.usage, now: ctx.date)
-                    Spacer(minLength: 0)
-                    NewChatButton(model: model).padding(.top, 8)
-                }
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stripHeight = $0 }
-            }
-        }
-        .staticDetailWhenReduced()
-    }
-
     var body: some View {
         ZStack(alignment: .top) {
             switch model.screen {
             case .chat: ChatView(model: model).transition(.screen(forward: model.navForward, reduceMotion: reduceMotion))
             case .compose: NewChatView(model: model).transition(.screen(forward: model.navForward, reduceMotion: reduceMotion))
-            case .list: list.transition(.screen(forward: model.navForward, reduceMotion: reduceMotion))
+            case .list: SessionListView(model: model).transition(.screen(forward: model.navForward, reduceMotion: reduceMotion))
             }
         }
         .offset(x: model.planReader != nil && !reduceMotion ? -28 : 0)
@@ -397,193 +504,5 @@ struct PanelView: View {
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .environment(\.colorScheme, .dark)
-    }
-
-    private func rows(_ now: Date) -> some View {
-        VStack(spacing: 1) {
-            // Chats the agents' hooks haven't reported as sessions; matched ones are the session rows below.
-            ForEach(model.chats.filter { c in !model.snapshot.sessions.contains { $0.id == c.sessionId } }) { c in
-                if model.confirmingDelete == c.id {
-                    DeleteConfirm(chat: c, model: model).transition(.opacity)
-                } else {
-                    ChatRow(chat: c, model: model).transition(.opacity)
-                }
-            }
-            ForEach(model.snapshot.sessions) { s in
-                if let c = model.chatFor(s), model.confirmingDelete == c.id {
-                    DeleteConfirm(chat: c, model: model).transition(.opacity)
-                } else {
-                    SessionRow(session: s, now: now, model: model)
-                }
-                if model.openGroups.contains(s.id) {
-                    ForEach(s.subagents, id: \.id) { sub in
-                        SubagentRow(sub: sub, agent: s.agent, now: now)
-                            .transition(.opacity)
-                    }
-                }
-            }
-        }
-    }
-}
-
-private struct SessionRow: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let session: SessionInfo
-    let now: Date
-    @ObservedObject var model: PanelModel
-    @State private var hover = false
-
-    private var status: (String, Color) {
-        switch session.state {
-        case .working: return (session.activity.isEmpty ? "Working" : session.activity, secondary)
-        case .needsInput: return ("Needs your input", amber)
-        case .finished: return ("Done", green)
-        case .idle: return ("Idle", secondary)
-        case .ended: return ("Ended", muted)
-        case .error: return ("Exited unexpectedly", muted)
-        case .stale: return ("No activity for 30m", muted)
-        }
-    }
-
-    var body: some View {
-        let open = model.openGroups.contains(session.id)
-        let running = session.subagents.filter { !$0.done }.count
-        HStack(alignment: .center, spacing: 10) {
-            AgentBadge(agent: session.agent, state: session.state, size: 16)
-                .frame(width: 18, height: 18)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    SessionTitle(model: model, keys: model.titleKeys(session), title: model.title(session))
-                    Spacer(minLength: 8)
-                    Text(Fmt.elapsed(session.since, now: now))
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(secondary)
-                }
-                HStack(spacing: 6) {
-                    Text(model.hint[session.id] ?? status.0)
-                        .font(.system(size: 11, weight: session.state == .needsInput ? .medium : .regular))
-                        .foregroundStyle(model.hint[session.id] == nil ? status.1 : muted)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 8)
-                    PRButton(model: model, session: session)
-                    if !session.subagents.isEmpty {
-                        Button {
-                            withAnimation(Motion.detail(reduceMotion: reduceMotion)) {
-                                if open { model.openGroups.remove(session.id) } else { model.openGroups.insert(session.id) }
-                            }
-                        } label: {
-                            Text("↳ \(running > 0 ? running : session.subagents.count)")
-                                .font(.system(size: 11, weight: .medium).monospacedDigit())
-                                .foregroundStyle(open ? ink : secondary)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 1)
-                                .background(Capsule().fill(Color.white.opacity(open ? 0.14 : 0.07)))
-                        }
-                        .buttonStyle(.plain)
-                        .help(open ? "Hide subagents" : "Show subagents")
-                        .accessibilityLabel("\(session.subagents.count) subagents")
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(hover ? 0.07 : 0)))
-        .contentShape(Rectangle())
-        .onHover { hover = $0 }
-        // A plain tap, nothing beside it: a simultaneous press-tint DragGesture swallowed the tap on the never-key panel.
-        .onTapGesture { if model.editingTitle == nil { model.tap(session) } }
-        .accessibilityElement(children: model.isEditingTitle(model.titleKeys(session)) ? .contain : .combine)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityHint(model.chatFor(session) != nil || session.transcriptPath != nil ? "Opens this conversation" : session.hasPlan ? "Opens this session’s plan" : "Shows this session's terminal")
-        .contextMenu {
-            Button("Rename session") { model.editTitle(keys: model.titleKeys(session), title: model.title(session)) }
-            if let c = model.chatFor(session) { Button("Delete chat") { model.confirmingDelete = c.id } }
-        }
-        // The row is one combined element, so its PR control is offered as actions.
-        .accessibilityActions {
-            Button("Rename session") { model.editTitle(keys: model.titleKeys(session), title: model.title(session)) }
-            switch model.pr[session.id] {
-            case .ready: Button("Open pull request") { model.startPR(session) }
-            case .staged: Button("Undo pull request") { model.undoPR(session.id) }
-            case .writing(false): Button("Cancel pull request") { model.cancelPR(session) }
-            case .done(let c): Button("Open PR #\(c.number)") { if let url = URL(string: c.url) { NSWorkspace.shared.open(url) } }
-            case .failed: Button("Retry pull request") { model.retryPR(session) }
-            default: EmptyView()
-            }
-            if let c = model.chatFor(session) { Button("Delete chat") { model.confirmingDelete = c.id } }
-        }
-    }
-}
-
-private struct SubagentRow: View {
-    let sub: Subagent
-    let agent: String
-    let now: Date
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Group {
-                if sub.done {
-                    Image(systemName: "checkmark").font(.system(size: 8, weight: .bold)).foregroundStyle(green)
-                } else {
-                    GlyphView(agent: agent, state: .working, size: 5)
-                }
-            }
-            .frame(width: 8, height: 8)
-            Text(sub.kind.isEmpty ? "Subagent" : sub.kind)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(ink)
-            Text(sub.done ? "Done" : sub.activity)
-                .font(.system(size: 11))
-                .foregroundStyle(secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 8)
-            Text(Fmt.elapsed(sub.since, now: now))
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundStyle(muted)
-        }
-        .padding(.leading, 48)
-        .padding(.trailing, 10)
-        .padding(.vertical, 4)
-        .opacity(sub.done ? 0.6 : 1)
-    }
-}
-
-/// One quiet line: last reported limits, never extrapolated; hidden when nothing reliable exists.
-private struct UsageStrip: View {
-    let usage: Usage
-    let now: Date
-
-    var body: some View {
-        let agents = [("claude", usage.claude), ("codex", usage.codex)].compactMap { n, u in u.map { (n, $0) } }
-        if !agents.isEmpty {
-            HStack(spacing: 14) {
-                ForEach(agents, id: \.0) { agent, u in
-                    HStack(spacing: 6) {
-                        AgentMark(agent: agent, size: 11)
-                        ForEach(u.windows, id: \.label) { w in
-                            let remainingPercent = min(100, max(0, 100 - w.usedPercent))
-                            Text("\(w.label) \(Int(remainingPercent.rounded()))%")
-                                .fontWeight(remainingPercent <= 10 ? .bold : .regular)
-                                .foregroundStyle(remainingPercent <= 10 ? ink : secondary)
-                            + Text(" · \(Fmt.until(w.resetsAt, now: now))").foregroundStyle(muted)
-                        }
-                        if now.timeIntervalSince1970 * 1000 - Double(u.observedAt) > 15 * 60 * 1000 {
-                            Text("as of \(Fmt.elapsed(u.observedAt, now: now)) ago").foregroundStyle(muted)
-                        }
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-            .font(.system(size: 11).monospacedDigit())
-            .lineLimit(1)
-            .padding(.horizontal, 10)
-            .padding(.top, 8)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Usage remaining")
-        }
     }
 }

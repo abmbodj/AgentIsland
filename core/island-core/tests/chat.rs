@@ -610,9 +610,11 @@ echo '{"type":"result","subtype":"success","is_error":false,"session_id":"s"}'"#
         std::thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(chats.transcript(id, 0).unwrap()["entries"][0]["images"], 1);
+    assert_eq!(chats.list()[0]["needsInput"], true);
     chats.answer(id, Some(serde_json::json!({"Which?": "A"}))).unwrap();
     let t = wait_for(&chats, id, "idle");
     assert!(t["question"].is_null());
+    assert_ne!(chats.list()[0]["needsInput"], true);
     let log = std::fs::read_to_string(root.join("bin/claude.in")).unwrap();
     assert!(log.contains("\"data\":\"QUJD\"") && log.contains("\"text\":\"look\""), "{log}");
     assert!(log.contains("\"behavior\":\"allow\"") && log.contains("\"answers\":{\"Which?\":\"A\"}"), "{log}");

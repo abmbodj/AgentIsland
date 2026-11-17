@@ -134,12 +134,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func playCues(old: Snapshot, new: Snapshot) {
         guard !new.paused else { return }
         let oldPending = Set(old.sessions.flatMap { $0.pending.map(\.id) })
-        let oldState = Dictionary(old.sessions.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
+        let oldState = Dictionary(old.sessions.map { ($0.key, $0.state) }, uniquingKeysWith: { a, _ in a })
         for s in new.sessions {
             let kind: Sounds.Kind?
             if s.pending.contains(where: { !oldPending.contains($0.id) }) {
                 kind = .needsInput
-            } else if s.state == .finished && oldState[s.id] != nil && oldState[s.id] != .finished {
+            } else if s.state == .finished && oldState[s.key] != nil && oldState[s.key] != .finished {
                 kind = .finished
             } else {
                 kind = nil

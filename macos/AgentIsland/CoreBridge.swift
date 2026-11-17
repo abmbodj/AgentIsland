@@ -15,6 +15,7 @@ struct SessionInfo: Decodable, Equatable, Identifiable {
     var agent: String
     var cwd: String
     var project: String
+    var projectRoot: String?
     var state: SessionState
     var activity: String
     var since: Int64
@@ -37,8 +38,8 @@ struct SessionInfo: Decodable, Equatable, Identifiable {
     var hasPlan: Bool { !(plans ?? []).isEmpty || pending.contains { $0.kind == "plan" || $0.tool == "ExitPlanMode" } }
 }
 
-enum SessionState: String, Decodable {
-    case working, idle, needsInput, finished, ended, error, stale
+extension SessionInfo {
+    var key: SessionKey { SessionKey(agent: agent, id: id) }
 }
 
 struct Attention: Decodable, Equatable, Identifiable {
