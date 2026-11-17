@@ -96,7 +96,8 @@ final class PanelModel: ObservableObject {
     private var titleChanges: AnyCancellable?
     @Published private var codexTitleIndexes: [String: CodexTitleIndex] = [:]
     private var loadingCodexTitles = false
-    private let composerCodexHome = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? ""
+    private let composerCodexHome = ProcessInfo.processInfo.environment["CODEX_HOME"]
+    private let defaultCodexHome = (CoreBridge.home as NSString).appendingPathComponent(".codex")
 
     private struct CodexTitleIndex: Decodable, Equatable {
         let revision: String
@@ -116,7 +117,7 @@ final class PanelModel: ObservableObject {
     }
 
     func title(_ session: SessionInfo) -> String {
-        let nativeTitle = session.agent == "codex" ? codexTitleIndexes[session.codexHome ?? ""]?.titles[session.id] : nil
+        let nativeTitle = session.agent == "codex" ? codexTitleIndexes[codexHome(for: session)]?.titles[session.id] : nil
         return SessionTitles.shared.title(for: titleKeys(session), fallback: nativeTitle ?? session.project)
     }
 
@@ -127,9 +128,18 @@ final class PanelModel: ObservableObject {
 
     private func codexHome(for chat: ChatInfo) -> String {
         if let session = snapshot.sessions.first(where: { $0.agent == "codex" && $0.id == chat.sessionId }) ?? chat.session {
-            return session.codexHome ?? ""
+            return codexHome(for: session)
         }
-        return composerCodexHome
+        return resolvedCodexHome(composerCodexHome, cwd: chat.cwd)
+    }
+
+    private func codexHome(for session: SessionInfo) -> String {
+        resolvedCodexHome(session.codexHome, cwd: session.cwd)
+    }
+
+    private func resolvedCodexHome(_ override: String?, cwd: String) -> String {
+        guard let override, !override.isEmpty else { return defaultCodexHome }
+        return override.hasPrefix("/") ? override : (cwd as NSString).appendingPathComponent(override)
     }
 
     func refreshCodexTitles() {
@@ -140,7 +150,7 @@ final class PanelModel: ObservableObject {
             homes[codexHome(for: item), default: []].insert(id)
         }
         for session in snapshot.sessions + [readerSession].compactMap({ $0 }) where session.agent == "codex" {
-            homes[session.codexHome ?? "", default: []].insert(session.id)
+            homes[codexHome(for: session), default: []].insert(session.id)
         }
         let previous = codexTitleIndexes.filter { homes[$0.key] != nil }
         guard !homes.isEmpty else {
