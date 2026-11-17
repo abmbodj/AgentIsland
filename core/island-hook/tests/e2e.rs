@@ -377,17 +377,62 @@ fn codex_fixture(name: &str) -> Value {
 }
 
 fn codex_hook(h: &Harness, home: &std::path::Path, name: &str) -> String {
-    let f = codex_fixture(name);
+    codex_hook_payload(h, home, &codex_fixture(name)["payload"])
+}
+
+fn codex_hook_payload(h: &Harness, home: &std::path::Path, payload: &Value) -> String {
     let mut c = Command::new(env!("CARGO_BIN_EXE_island-hook"))
         .arg("codex")
+        .current_dir(h.sock.parent().unwrap())
         .env("ISLAND_SOCKET", &h.sock)
         .env("CODEX_HOME", home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
-    c.stdin.take().unwrap().write_all(f["payload"].to_string().as_bytes()).unwrap();
+    c.stdin.take().unwrap().write_all(payload.to_string().as_bytes()).unwrap();
     String::from_utf8(c.wait_with_output().unwrap().stdout).unwrap()
+}
+
+#[test]
+fn codex_titles_follow_the_session_index_without_another_hook() {
+    use serde_json::json;
+    use std::os::unix::fs::PermissionsExt;
+
+    let h = start("codex-titles");
+    let home = h.sock.parent().unwrap().join("launch-directory/custom-codex-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let index = home.join("session_index.jsonl");
+    let mut payload = codex_fixture("SessionStart")["payload"].clone();
+    payload["transcript_path"] = json!(home.join("sessions/2026/11/17/rollout.jsonl"));
+    codex_hook_payload(&h, std::path::Path::new("custom-codex-home"), &payload);
+    let snapshot = h.last();
+    let session = &snapshot["sessions"][0];
+    let id = session["id"].as_str().unwrap();
+    let lookup = |revision: &Value| h.core.call(&json!({
+        "op": "codexTitles", "codexHome": session["codexHome"], "ids": [id], "revision": revision
+    }))["ok"].clone();
+    assert_eq!(session["codexHome"], home.to_str().unwrap());
+    let missing = lookup(&Value::Null);
+    assert_eq!(missing["titles"], json!({}), "the index may not exist yet");
+
+    let mut file = std::fs::File::create(&index).unwrap();
+    writeln!(file, "{}", json!({"id": id, "thread_name": "Original chat title"})).unwrap();
+    let original = lookup(&missing["revision"]);
+    assert_eq!(original["titles"], json!({ (id): "Original chat title" }));
+    assert_eq!(lookup(&original["revision"]), Value::Null, "an unchanged lookup has no payload");
+    writeln!(file, "{}", json!({"id": "other", "thread_name": "Unrelated chat"})).unwrap();
+    writeln!(file, "{}", json!({"id": id, "thread_name": "Updated chat title"})).unwrap();
+    writeln!(file, "{{").unwrap();
+    if unsafe { libc::geteuid() } != 0 {
+        file.set_permissions(std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert_eq!(lookup(&original["revision"]), Value::Null, "an unreadable index should be retried");
+        file.set_permissions(std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let renamed = lookup(&original["revision"]);
+    assert_eq!(renamed["titles"], json!({ (id): "Updated chat title" }));
+    writeln!(file, "{}", json!({"id": id, "thread_name": "  "})).unwrap();
+    assert_eq!(lookup(&renamed["revision"])["titles"], json!({}), "an empty name falls back in the panel");
 }
 
 #[test]

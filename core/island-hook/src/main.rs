@@ -5,7 +5,7 @@
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -19,6 +19,20 @@ fn socket_path() -> PathBuf {
     std::env::var_os("ISLAND_SOCKET").map(PathBuf::from).unwrap_or_else(|| {
         PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join("Library/Application Support/AgentIsland/island.sock")
     })
+}
+
+fn codex_rollout_home(payload: Option<&Value>) -> Option<&Path> {
+    let path = Path::new(payload?["transcript_path"].as_str()?);
+    let folder = path.parent()?;
+    // Active rollouts are under sessions/YYYY/MM/DD. Archived rollouts live one level deep.
+    let root = if folder.ends_with("archived_sessions") {
+        folder
+    } else {
+        let sessions = folder.parent()?.parent()?.parent()?;
+        if !sessions.ends_with("sessions") { return None }
+        sessions
+    };
+    root.parent().filter(|home| home.is_absolute())
 }
 
 #[cfg(target_os = "macos")]
@@ -122,13 +136,26 @@ fn main() {
             if parsed.as_ref().is_some_and(|v| v.get("cursor_version").is_some() || ephemeral(v)) {
                 return;
             }
-            let event = parsed.and_then(|v| v["hook_event_name"].as_str().map(str::to_string));
+            let event = parsed.as_ref().and_then(|v| v["hook_event_name"].as_str());
             // Approvals wait for the user (the agent's own timeout bounds us); everything else is quick.
-            let wait = if event.as_deref() == Some("PermissionRequest") { None } else { Some(Duration::from_secs(2)) };
-            let env: serde_json::Map<String, Value> = ENV_KEYS
+            let wait = if event == Some("PermissionRequest") { None } else { Some(Duration::from_secs(2)) };
+            let mut env: serde_json::Map<String, Value> = ENV_KEYS
                 .iter()
                 .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), Value::String(v))))
                 .collect();
+            // The rollout records the actual home even if the hook runs in a different directory.
+            if agent == "codex" {
+                if let Some(home) = env.get_mut("CODEX_HOME") {
+                    let path = Path::new(home.as_str().unwrap_or_default());
+                    if !path.as_os_str().is_empty() && path.is_relative() {
+                        let resolved = codex_rollout_home(parsed.as_ref()).map(Path::to_path_buf)
+                            .or_else(|| std::env::current_dir().ok().map(|cwd| cwd.join(path)));
+                        if let Some(resolved) = resolved {
+                            *home = json!(resolved);
+                        }
+                    }
+                }
+            }
             let (pids, tty) = process_chain();
             let msg = json!({"v": 1, "agent": agent, "payload": payload, "env": env, "tty": tty, "pids": pids});
             if let Some(out) = send(&msg, Some(wait)) {
