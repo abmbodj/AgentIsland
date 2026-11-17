@@ -30,6 +30,7 @@ struct SessionInfo: Decodable, Equatable, Identifiable {
     var plans: [ChatPlan]?
     /// The agent's own transcript file, for the history view.
     var transcriptPath: String?
+    var codexHome: String?
     /// Inside the Claude or Codex desktop app, which keeps the conversation to itself.
     var isDesktop: Bool {
         terminal.hostSession != nil || [Jumper.App.claudeDesktop.rawValue, Jumper.App.codexDesktop.rawValue].contains(terminal.bundleId)
@@ -130,12 +131,14 @@ final class CoreBridge {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("AgentIsland")
     }
 
+    // Tests can point integrations at a scratch home.
+    static let home = ProcessInfo.processInfo.environment["AGENT_ISLAND_HOME"] ?? NSHomeDirectory()
+
     func start() throws {
         let hook = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/island-hook").path
         var config: [String: Any] = [
             "supportDir": Self.supportDir.path,
-            // Test hook: point integrations at a scratch home instead of the real one.
-            "home": ProcessInfo.processInfo.environment["AGENT_ISLAND_HOME"] ?? NSHomeDirectory(),
+            "home": Self.home,
             "hookSource": hook,
         ]
         // Test hook: a scratch socket lets a second build run beside the installed app.

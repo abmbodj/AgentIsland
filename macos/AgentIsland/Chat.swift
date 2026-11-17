@@ -754,6 +754,7 @@ extension PanelModel {
             }
             if tick % 12 == 0 {
                 self.refreshChats()
+                self.refreshCodexTitles()
                 self.processHandoffs()
             }
         }
