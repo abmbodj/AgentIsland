@@ -1236,7 +1236,10 @@ struct DeleteConfirm: View {
 struct ChatRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let chat: ChatInfo
+    let context: String?
+    let selected: Bool
     @ObservedObject var model: PanelModel
+    let openRow: () -> Void
     @State private var hover = false
 
     private var state: SessionState {
@@ -1260,7 +1263,8 @@ struct ChatRow: View {
             AgentBadge(agent: chat.agent, state: state, size: 16).frame(width: 18, height: 18)
             VStack(alignment: .leading, spacing: 2) {
                 SessionTitle(model: model, keys: model.titleKeys(chat), title: model.title(chat))
-                Text(status).font(.system(size: 11)).foregroundStyle(secondary)
+                Text(status + (context.map { " · " + $0 } ?? "")).font(.system(size: 11)).foregroundStyle(secondary)
+                    .lineLimit(1).truncationMode(.middle)
             }
             Spacer(minLength: 8)
             Button { model.confirmingDelete = chat.id } label: {
@@ -1274,16 +1278,18 @@ struct ChatRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(hover ? 0.07 : 0)))
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(selected ? 0.15 : hover ? 0.07 : 0)))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
-        .onTapGesture { if model.editingTitle == nil { model.openChat(chat) } }
+        .onTapGesture { if model.editingTitle == nil { openRow() } }
         .contextMenu {
             Button("Rename session") { model.editTitle(keys: model.titleKeys(chat), title: model.title(chat)) }
             Button("Delete chat") { model.confirmingDelete = chat.id }
         }
         .accessibilityElement(children: model.isEditingTitle(model.titleKeys(chat)) ? .contain : .combine)
         .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityAction { if model.editingTitle == nil { openRow() } }
         .accessibilityHint("Opens this conversation")
         .accessibilityActions {
             Button("Rename session") { model.editTitle(keys: model.titleKeys(chat), title: model.title(chat)) }

@@ -283,7 +283,7 @@ extension PanelModel {
         return composing || !hasHistory ? .compose : .list
     }
 
-    var canGoBack: Bool { planReader != nil || chat != nil || (composing && hasHistory) }
+    var canGoBack: Bool { planReader != nil || chat != nil || (composing && hasHistory) || (screen == .list && listRoute != .activity) }
 
     /// Slide to another screen: the direction is set first, then the change lands on the next turn
     /// of the run loop, so the outgoing screen's removal transition already knows which way to leave.
@@ -306,6 +306,8 @@ extension PanelModel {
             closeChat()
         } else if composing {
             navigate(forward: false) { [self] in composing = false }
+        } else if listRoute != .activity {
+            leaveListRoute()
         }
     }
 
@@ -373,11 +375,12 @@ extension PanelModel {
         }
     }
 
-    func chatFor(_ s: SessionInfo) -> ChatInfo? { chats.first { $0.sessionId == s.id } }
+    func chatFor(_ s: SessionInfo) -> ChatInfo? { chats.first { $0.agent == s.agent && $0.sessionId == s.id } }
 
     /// A session row opens its chat, else its history from the agent's transcript; with neither it opens
     /// the plan or jumps to the terminal.
     func tap(_ s: SessionInfo) {
+        if s.state == .finished { acknowledgeCompletion(s.key, since: s.since) }
         // The chat list is only polled while open, so a just-started chat may not be linked to its row yet.
         if chatFor(s) == nil { refreshChats() }
         if let c = chatFor(s) { openChat(c); return }

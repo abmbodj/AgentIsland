@@ -194,6 +194,19 @@ fn finished_fades_to_idle_once_viewed() {
 }
 
 #[test]
+fn acknowledging_an_older_completion_keeps_the_current_one() {
+    let mut s = store_with_session();
+    s.handle(&claude("Stop", json!({})), T0 + 1);
+    s.handle(&claude("UserPromptSubmit", json!({})), T0 + 2);
+    s.handle(&claude("Stop", json!({})), T0 + 3);
+    let (agent, id) = sid(&s);
+    s.viewed_completion(&agent, &id, T0 + 1, T0 + 4);
+    assert_eq!(only(&s).state, State::Finished);
+    s.viewed_completion(&agent, &id, T0 + 3, T0 + 4);
+    assert_eq!(only(&s).state, State::Idle);
+}
+
+#[test]
 fn viewing_a_working_session_changes_nothing() {
     let mut s = store_with_session();
     s.handle(&claude("UserPromptSubmit", json!({})), T0 + 1);
@@ -384,12 +397,14 @@ fn desktop_sessions_take_the_apps_title_then_their_repo_name() {
     m.env.insert("CLAUDE_CODE_HOST_SESSION_ID".into(), "local_abc-1".into());
     s.handle(&m, T0);
     assert_eq!(only(&s).project, "AgentShelf2");
+    assert_eq!(only(&s).project_root.as_deref(), Some("/Users/me/AgentShelf2"));
     // The app names the session after the first turn.
     std::fs::write(&file, r#"{"title":"Open PR button design","originCwd":"/Users/me/AgentShelf2"}"#).unwrap();
     let mut stop = claude("Stop", json!({}));
     stop.env = m.env.clone();
     s.handle(&stop, T0 + 1);
     assert_eq!(only(&s).project, "Open PR button design");
+    assert_eq!(only(&s).project_root.as_deref(), Some("/Users/me/AgentShelf2"));
     // An id that isn't the app's shape is never used as a path.
     m.env.insert("CLAUDE_CODE_HOST_SESSION_ID".into(), "../acct/org/local_abc-1".into());
     let mut other = Store::default();

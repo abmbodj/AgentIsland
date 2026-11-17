@@ -99,6 +99,8 @@ pub struct Session {
     pub agent: String,
     pub cwd: String,
     pub project: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<String>,
     pub state: State,
     pub activity: String,
     /// When the current state began (turn start while Working).
@@ -190,8 +192,8 @@ impl Terminal {
     }
 }
 
-/// The desktop app's title for a session, else its repo's name (a worktree's cwd is a scratch folder).
-fn desktop_name(dir: &Path, local_id: &str) -> Option<String> {
+/// The desktop app's display title and original project path, which can differ from a worktree's cwd.
+fn desktop_project(dir: &Path, local_id: &str) -> Option<(Option<String>, Option<String>)> {
     // The id comes from a hook's environment and becomes a file name: only the app's own shape.
     let id = local_id.strip_prefix("local_")?;
     if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
@@ -202,8 +204,10 @@ fn desktop_name(dir: &Path, local_id: &str) -> Option<String> {
             let Ok(text) = std::fs::read_to_string(org.path().join(format!("{local_id}.json"))) else { continue };
             let v: Value = serde_json::from_str(&text).ok()?;
             let title = v["title"].as_str().filter(|t| !t.trim().is_empty());
-            let repo = v["originCwd"].as_str().and_then(|c| c.rsplit('/').find(|s| !s.is_empty()));
-            return title.or(repo).map(str::to_string);
+            let cwd = v["originCwd"].as_str();
+            let repo = cwd.and_then(|c| c.rsplit('/').find(|s| !s.is_empty()));
+            let root = cwd.filter(|c| c.starts_with('/'));
+            return Some((title.or(repo).map(str::to_string), root.map(str::to_string)));
         }
     }
     None
@@ -335,6 +339,7 @@ impl Store {
                     agent: msg.agent.clone(),
                     cwd,
                     project,
+                    project_root: None,
                     state: State::Idle,
                     activity: String::new(),
                     since: now,
@@ -373,8 +378,9 @@ impl Store {
             }
             // The app titles a session after its first turn, so look again when a turn ends.
             if s.terminal.host_session != host || matches!(event, "SessionStart" | "Stop") {
-                if let Some(name) = desktop_sessions.zip(s.terminal.host_session.as_deref()).and_then(|(d, id)| desktop_name(d, id)) {
-                    s.project = name;
+                if let Some((name, root)) = desktop_sessions.zip(s.terminal.host_session.as_deref()).and_then(|(d, id)| desktop_project(d, id)) {
+                    if let Some(name) = name { s.project = name; }
+                    if root.is_some() { s.project_root = root; }
                 }
             }
         }
@@ -892,6 +898,15 @@ impl Store {
                 s.set(State::Idle, now);
             }
             if s.state == State::Finished {
+                s.set(State::Idle, now);
+            }
+        }
+    }
+
+    /// A row may have been replaced by a newer completion while the UI event was in flight.
+    pub fn viewed_completion(&mut self, agent: &str, id: &str, since: Millis, now: Millis) {
+        if let Some(s) = self.find(agent, id) {
+            if s.state == State::Finished && s.since == since {
                 s.set(State::Idle, now);
             }
         }
