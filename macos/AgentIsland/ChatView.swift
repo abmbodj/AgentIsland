@@ -1,10 +1,5 @@
 import SwiftUI
 
-private let ink = Color(nsColor: Theme.ink)
-private let secondary = Color(nsColor: Theme.secondary)
-private let muted = Color(nsColor: Theme.muted)
-private let amber = Color(nsColor: Theme.amber)
-
 // MARK: - Composer
 
 /// Multi-line input: Return sends, Shift+Return inserts a newline. Clicking it asks the controller for
@@ -180,7 +175,7 @@ struct Composer: View {
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(running || !blank ? Color.black : muted)
                         .frame(width: 24, height: 24)
-                        .background(Circle().fill(running || !blank ? ink : Color.white.opacity(0.1)))
+                        .background(Circle().fill(running || !blank ? ink : Color.white.opacity(Lift.raised)))
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -194,7 +189,7 @@ struct Composer: View {
             .padding(.leading, 12)
             .padding(.trailing, 6)
             .padding(.vertical, 3)
-            .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.07)))
+            .background(RoundedRectangle(cornerRadius: Radius.field).fill(Color.white.opacity(Lift.block)))
             .dropDestination(for: URL.self) { urls, _ in model.attachFiles(urls); return !urls.isEmpty }
             options
         }
@@ -212,7 +207,7 @@ struct Composer: View {
                         .resizable()
                         .scaledToFill()
                         .frame(width: 44, height: 44)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.control))
                         .overlay(alignment: .topTrailing) {
                             Button { model.images.removeAll { $0.id == img.id } } label: {
                                 Image(systemName: "xmark.circle.fill")
@@ -250,7 +245,7 @@ struct Composer: View {
                     .foregroundStyle(on ? ink : secondary)
                     .padding(.horizontal, 8)
                     .frame(height: 22)
-                    .background(Capsule().fill(Color.white.opacity(on ? 0.14 : 0)))
+                    .background(Capsule().fill(Color.white.opacity(on ? Lift.selected : 0)))
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -283,7 +278,7 @@ struct Composer: View {
                 Button { model.chooseComposerDir() } label: {
                     Chip(icon: "folder", text: model.composerDirName, menu: false)
                 }
-                .buttonStyle(IslandButtonStyle(radius: 6))
+                .buttonStyle(IslandButtonStyle(radius: Radius.chip))
                 .fixedSize()
                 .help(model.composerDir)
                 .accessibilityLabel("Working folder: \(model.composerDirName)")
@@ -316,9 +311,9 @@ private struct Chip: View {
         .foregroundStyle(ultracode ? ultracodeViolet : (hover ? ink : secondary))
         .padding(.horizontal, 6)
         .frame(height: 22)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(hover ? 0.08 : 0)))
-        .background(RoundedRectangle(cornerRadius: 6).fill(ultracodeViolet.opacity(ultracode ? 0.16 : 0)))
-        .overlay(RoundedRectangle(cornerRadius: 6)
+        .background(RoundedRectangle(cornerRadius: Radius.chip).fill(Color.white.opacity(hover ? Lift.block : 0)))
+        .background(RoundedRectangle(cornerRadius: Radius.chip).fill(ultracodeViolet.opacity(ultracode ? 0.16 : 0)))
+        .overlay(RoundedRectangle(cornerRadius: Radius.chip)
             .strokeBorder(ultracodeViolet.opacity(ultracode ? 0.3 : 0), lineWidth: 1))
         .contentShape(Rectangle())
         .onHover { h in withAnimation(Motion.feedback(reduceMotion: reduceMotion)) { hover = h } }
@@ -366,7 +361,7 @@ private struct TurnChips: View {
             } label: {
                 Chip(icon: mode.icon, text: mode.name)
             }
-            .menuStyle(.button).buttonStyle(IslandButtonStyle(radius: 6)).menuIndicator(.hidden).fixedSize()
+            .menuStyle(.button).buttonStyle(IslandButtonStyle(radius: Radius.chip)).menuIndicator(.hidden).fixedSize()
             .help("Mode")
             .accessibilityLabel("Mode: \(mode.name)")
 
@@ -408,7 +403,7 @@ private struct TurnChips: View {
             } label: {
                 Chip(icon: settings.isUltracode ? "sparkles" : (settings.fast ? "bolt.fill" : "cpu"), text: modelText, ultracode: settings.isUltracode)
             }
-            .menuStyle(.button).buttonStyle(IslandButtonStyle(radius: 6)).menuIndicator(.hidden).fixedSize()
+            .menuStyle(.button).buttonStyle(IslandButtonStyle(radius: Radius.chip)).menuIndicator(.hidden).fixedSize()
             .help("Model and effort")
             .accessibilityLabel("Model: \(settings.name ?? settings.model ?? "Default")"
                 + (settings.effort.map { ", effort \(TurnLabels.effort($0))" } ?? "") + (settings.fast ? ", fast mode" : "")
@@ -450,6 +445,7 @@ struct ChatView: View {
             handoffFooter
                 .padding(.horizontal, 6)
                 .padding(.top, 4)
+            LiveUsageFooter(model: model).padding(.top, 10)
         }
         .frame(height: PanelModel.chatHeight)
     }
@@ -477,7 +473,7 @@ struct ChatView: View {
                 Button { model.onJump(s) } label: {
                     Image(systemName: "arrow.up.forward.app").font(.system(size: 12)).foregroundStyle(secondary).frame(width: 28, height: 26).contentShape(Rectangle())
                 }
-                .buttonStyle(IslandButtonStyle(radius: 6))
+                .buttonStyle(IslandButtonStyle(radius: Radius.chip))
                 .accessibilityLabel("Jump to session")
                 .help(s.isDesktop ? "Open this session in its app" : "Show this session's terminal")
             } else if let c = model.chat {
@@ -500,7 +496,7 @@ struct ChatView: View {
                 Button { model.confirmingDelete = c.id } label: {
                     Image(systemName: "trash").font(.system(size: 12)).foregroundStyle(secondary).frame(width: 28, height: 26).contentShape(Rectangle())
                 }
-                .buttonStyle(IslandButtonStyle(radius: 6))
+                .buttonStyle(IslandButtonStyle(radius: Radius.chip))
                 .disabled(model.loadingChat)
                 .accessibilityLabel("Delete chat")
                 .help("Delete this chat")
@@ -543,7 +539,7 @@ struct ChatView: View {
                 }
                 .foregroundStyle(ink)
                 .padding(10)
-                .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.07)))
+                .background(RoundedRectangle(cornerRadius: Radius.card).fill(Color.white.opacity(Lift.block)))
             } else if model.loadingChat {
                 EmptyView()
             } else if model.canReply {
@@ -557,7 +553,7 @@ struct ChatView: View {
                 }
                 .foregroundStyle(ink)
                 .padding(10)
-                .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.07)))
+                .background(RoundedRectangle(cornerRadius: Radius.card).fill(Color.white.opacity(Lift.block)))
             }
         }
     }
@@ -742,8 +738,8 @@ private struct QuestionCard: View {
                             }
                             .padding(.horizontal, 10).padding(.vertical, 7)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(on ? 0.14 : 0.07)))
-                            .contentShape(RoundedRectangle(cornerRadius: 8))
+                            .background(RoundedRectangle(cornerRadius: Radius.control).fill(Color.white.opacity(on ? Lift.selected : Lift.block)))
+                            .contentShape(RoundedRectangle(cornerRadius: Radius.control))
                         }
                         .buttonStyle(.plain)
                         .accessibilityAddTraits(on ? .isSelected : [])
@@ -757,7 +753,7 @@ private struct QuestionCard: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(ready ? Color.black : muted)
                         .padding(.horizontal, 12).frame(height: 24)
-                        .background(Capsule().fill(ready ? ink : Color.white.opacity(0.1)))
+                        .background(Capsule().fill(ready ? ink : Color.white.opacity(Lift.raised)))
                         .disabled(!ready)
                 }
                 Button("Skip") { model.answerChat(nil) }
@@ -766,8 +762,8 @@ private struct QuestionCard: View {
             }
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.05)))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.1)))
+        .background(RoundedRectangle(cornerRadius: Radius.card).fill(Color.white.opacity(Lift.inset)))
+        .overlay(RoundedRectangle(cornerRadius: Radius.card).strokeBorder(Color.white.opacity(Lift.block)))
         .accessibilityElement(children: .contain)
     }
 }
@@ -781,10 +777,10 @@ struct BannerButton: View {
             Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(ink)
                 .padding(.horizontal, 10)
                 .frame(height: 26)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.1)))
+                .background(RoundedRectangle(cornerRadius: Radius.chip).fill(Color.white.opacity(Lift.raised)))
                 .contentShape(Rectangle())
         }
-        .buttonStyle(IslandButtonStyle(radius: 6))
+        .buttonStyle(IslandButtonStyle(radius: Radius.chip))
     }
 }
 
@@ -804,7 +800,7 @@ struct Banner<Action: View>: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
+        .background(RoundedRectangle(cornerRadius: Radius.row).fill(Color.white.opacity(Lift.inset)))
         .accessibilityElement(children: .contain)
     }
 }
@@ -848,7 +844,7 @@ private struct EntryView: View {
                         Label(entry.images == 1 ? "1 image" : "\(entry.images) images", systemImage: "photo")
                             .font(.system(size: 11)).foregroundStyle(secondary)
                             .padding(.horizontal, 12).padding(.vertical, 6)
-                            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08)))
+                            .background(RoundedRectangle(cornerRadius: Radius.card).fill(Color.white.opacity(Lift.block)))
                     }
                     if !entry.text.isEmpty {
                         Text(entry.text)
@@ -857,7 +853,7 @@ private struct EntryView: View {
                             .textSelection(.enabled)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
-                            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08)))
+                            .background(RoundedRectangle(cornerRadius: Radius.card).fill(Color.white.opacity(Lift.block)))
                     }
                     if !entry.caption.isEmpty {
                         Text(entry.caption).font(.system(size: 10)).foregroundStyle(muted).padding(.trailing, 4)
@@ -941,7 +937,7 @@ private struct CodeBlock: View {
                     .frame(height: 20)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(IslandButtonStyle(radius: 5))
+                .buttonStyle(IslandButtonStyle(radius: Radius.chip))
                 .accessibilityLabel(copied ? "Copied" : "Copy code")
             }
             .padding(.horizontal, 10)
@@ -957,7 +953,7 @@ private struct CodeBlock: View {
                     .padding(.bottom, 10)
             }
         }
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.06)))
+        .background(RoundedRectangle(cornerRadius: Radius.control).fill(Color.white.opacity(Lift.inset)))
     }
 }
 
@@ -1079,7 +1075,7 @@ private struct ToolRow: View {
                 }
                 .padding(.horizontal, 8)
                 .frame(minHeight: 28)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
+                .background(RoundedRectangle(cornerRadius: Radius.control).fill(Color.white.opacity(Lift.inset)))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1130,27 +1126,31 @@ struct BackButton: View {
             .frame(height: 26)
             .contentShape(Rectangle())
         }
-        .buttonStyle(IslandButtonStyle(radius: 6))
+        .buttonStyle(IslandButtonStyle(radius: Radius.chip))
         .accessibilityLabel("Back to sessions")
         .help("Back to sessions (⌘[)")
     }
 }
 
-/// The chat icon in the session list's footer.
+/// Starts a new Claude Code or Codex chat, from the session list's title row.
 struct NewChatButton: View {
     @ObservedObject var model: PanelModel
 
     var body: some View {
         Button { model.openCompose() } label: {
-            Image(systemName: "bubble.left")
-                .font(.system(size: 13))
-                .foregroundStyle(secondary)
-                .frame(width: 30, height: 28)
-                .contentShape(Rectangle())
+            HStack(spacing: 5) {
+                Image(systemName: "bubble.left").font(.system(size: 11, weight: .medium))
+                Text("New chat").font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(ink)
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(RoundedRectangle(cornerRadius: Radius.control).fill(Color.white.opacity(Lift.raised)))
+            .contentShape(Rectangle())
         }
-        .buttonStyle(IslandButtonStyle(radius: 8))
+        .buttonStyle(IslandButtonStyle(radius: Radius.control))
         .accessibilityLabel("New chat")
-        .help("New chat")
+        .help("Start a Claude Code or Codex chat")
     }
 }
 
@@ -1190,6 +1190,7 @@ struct NewChatView: View {
             .accessibilityElement(children: .combine)
             Composer(model: model, mode: .new)
                 .padding(.top, 6)
+            LiveUsageFooter(model: model).padding(.top, 14)
         }
     }
 }
@@ -1213,18 +1214,18 @@ struct DeleteConfirm: View {
             Button { withAnimation(Motion.feedback(reduceMotion: reduceMotion)) { model.confirmingDelete = nil } } label: {
                 Text("Cancel").font(.system(size: 12)).foregroundStyle(secondary).padding(.horizontal, 10).frame(height: 26).contentShape(Rectangle())
             }
-            .buttonStyle(IslandButtonStyle(radius: 6))
+            .buttonStyle(IslandButtonStyle(radius: Radius.chip))
             Button { model.deleteChat(chat) } label: {
                 Text("Delete").font(.system(size: 12, weight: .semibold)).foregroundStyle(ink)
                     .padding(.horizontal, 10).frame(height: 26)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.14)))
+                    .background(RoundedRectangle(cornerRadius: Radius.chip).fill(Color.white.opacity(Lift.selected)))
                     .contentShape(Rectangle())
             }
-            .buttonStyle(IslandButtonStyle(radius: 6))
+            .buttonStyle(IslandButtonStyle(radius: Radius.chip))
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
+        .background(RoundedRectangle(cornerRadius: Radius.row).fill(Color.white.opacity(Lift.inset)))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Delete \(model.title(chat))?")
     }
@@ -1265,7 +1266,7 @@ struct ChatRow: View {
             Button { model.confirmingDelete = chat.id } label: {
                 Image(systemName: "trash").font(.system(size: 12)).foregroundStyle(secondary).frame(width: 26, height: 26).contentShape(Rectangle())
             }
-            .buttonStyle(IslandButtonStyle(radius: 6))
+            .buttonStyle(IslandButtonStyle(radius: Radius.chip))
             .opacity(hover ? 1 : 0)
             .animation(Motion.feedback(reduceMotion: reduceMotion), value: hover)
             .accessibilityHidden(true) // offered as an action on the row instead
@@ -1273,8 +1274,8 @@ struct ChatRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(selected || hover ? 0.07 : 0)))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(secondary.opacity(selected ? 0.6 : 0), lineWidth: 1).allowsHitTesting(false))
+        .background(RoundedRectangle(cornerRadius: Radius.row).fill(Color.white.opacity(selected || hover ? Lift.block : 0)))
+        .overlay(RoundedRectangle(cornerRadius: Radius.row).strokeBorder(secondary.opacity(selected ? 0.6 : 0), lineWidth: 1).allowsHitTesting(false))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         .onTapGesture { if model.editingTitle == nil { openRow() } }
@@ -1309,6 +1310,6 @@ struct ChatPermissionCard: View {
             Label(approval.tool, systemImage: "exclamationmark.circle").font(.system(size: 13, weight: .semibold))
             ScrollView { Text(approval.detail).font(.system(size: 12, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 100)
             HStack { Button("Deny") { answer(false) }; Spacer(); Button("Allow once") { answer(true) } }.buttonStyle(.borderless)
-        }.padding(10).foregroundStyle(Color(nsColor: Theme.ink)).background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+        }.padding(10).foregroundStyle(Color(nsColor: Theme.ink)).background(Color.white.opacity(Lift.block), in: RoundedRectangle(cornerRadius: Radius.control))
     }
 }

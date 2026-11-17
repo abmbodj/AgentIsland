@@ -1,10 +1,6 @@
 import SwiftUI
 import QuartzCore
 
-private let ink = Color(nsColor: Theme.ink)
-private let secondary = Color(nsColor: Theme.secondary)
-private let muted = Color(nsColor: Theme.muted)
-
 /// The one card that needs the user, above the session rows. Never stacked: "1 of 3" + ‹ ›.
 struct CardArea: View {
     @ObservedObject var model: PanelModel
@@ -21,7 +17,7 @@ struct CardArea: View {
                     .transition(.opacity)
             }
             .padding(.bottom, 6)
-            Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1).padding(.horizontal, 10).padding(.bottom, 4)
+            Rectangle().fill(Color.white.opacity(Lift.block)).frame(height: 1).padding(.horizontal, 10).padding(.bottom, 4)
         }
     }
 }
@@ -70,7 +66,7 @@ private struct ResponseButton: View {
             .foregroundStyle(primary && !mine ? Color.black.opacity(0.85) : ink)
             .padding(.horizontal, 12)
             .frame(height: 28)
-            .background(RoundedRectangle(cornerRadius: 8).fill(primary && !mine ? ink : Color.white.opacity(hover ? 0.16 : 0.1)))
+            .background(RoundedRectangle(cornerRadius: Radius.control).fill(primary && !mine ? ink : Color.white.opacity(hover ? Lift.selected : Lift.raised)))
             .contentShape(Rectangle())
         }
         .buttonStyle(IslandButtonStyle())
@@ -196,10 +192,10 @@ private struct CardView: View {
             Spacer(minLength: 6)
             if count > 1 {
                 Button { model.move(-1) } label: { Image(systemName: "chevron.left").frame(width: 18, height: 18).contentShape(Rectangle()) }
-                    .buttonStyle(IslandButtonStyle(radius: 5)).foregroundStyle(secondary).accessibilityLabel("Previous request")
+                    .buttonStyle(IslandButtonStyle(radius: Radius.chip)).foregroundStyle(secondary).accessibilityLabel("Previous request")
                 Text("\(index + 1) of \(count)").font(.system(size: 11).monospacedDigit()).foregroundStyle(secondary)
                 Button { model.move(1) } label: { Image(systemName: "chevron.right").frame(width: 18, height: 18).contentShape(Rectangle()) }
-                    .buttonStyle(IslandButtonStyle(radius: 5)).foregroundStyle(secondary).accessibilityLabel("Next request")
+                    .buttonStyle(IslandButtonStyle(radius: Radius.chip)).foregroundStyle(secondary).accessibilityLabel("Next request")
             }
         }
         .accessibilityElement(children: .combine)
@@ -222,7 +218,7 @@ private struct CardView: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.06)))
+                    .background(RoundedRectangle(cornerRadius: Radius.control).fill(Color.white.opacity(Lift.inset)))
                     .onTapGesture { showFull.toggle() }
             }
             if let d = item.diff {
@@ -286,7 +282,7 @@ private struct CardView: View {
                             .font(.system(size: 12))
                             .padding(.horizontal, 8)
                             .frame(height: 28)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.08)))
+                            .background(RoundedRectangle(cornerRadius: Radius.control).fill(Color.white.opacity(Lift.block)))
                             .onSubmit { model.submitFreeText(item) }
                     } else if model.summoned {
                         TextField("Type another answer", text: $model.freeText)
@@ -294,7 +290,7 @@ private struct CardView: View {
                             .font(.system(size: 12))
                             .padding(.horizontal, 8)
                             .frame(height: 28)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.08)))
+                            .background(RoundedRectangle(cornerRadius: Radius.control).fill(Color.white.opacity(Lift.block)))
                             .onSubmit { model.submitFreeText(item) }
                     } else {
                         Button { model.onSummon() } label: {
@@ -333,7 +329,7 @@ private struct CardView: View {
                 Button { model.onJump(session) } label: {
                     Text(session.agent == "codex" && session.terminal.bundleId == "com.openai.codex" ? "Open in Codex" : "Open session").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.black.opacity(0.85))
                         .padding(.horizontal, 12).frame(height: 28)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(ink))
+                        .background(RoundedRectangle(cornerRadius: Radius.control).fill(ink))
                 }
                 .buttonStyle(IslandButtonStyle())
             }
@@ -363,7 +359,7 @@ private struct OptionRow: View {
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
                 .foregroundStyle(secondary)
                 .frame(width: 18, height: 18)
-                .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.08)))
+                .background(RoundedRectangle(cornerRadius: Radius.chip).fill(Color.white.opacity(Lift.block)))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(mine ? "\(option.label) · Undo" : option.label).font(.system(size: 13, weight: .medium)).foregroundStyle(ink)
                     if !option.description.isEmpty && option.description != option.label {
@@ -375,7 +371,7 @@ private struct OptionRow: View {
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(hover || picked || mine ? 0.08 : 0)))
+            .background(RoundedRectangle(cornerRadius: Radius.control).fill(Color.white.opacity(hover || picked || mine ? Lift.block : 0)))
             .contentShape(Rectangle())
         }
         .buttonStyle(IslandButtonStyle())
@@ -399,12 +395,12 @@ private struct DiffLines: View {
                         .strikethrough(line.hasPrefix("-"), color: muted.opacity(0.6))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 8)
-                        .background(line.hasPrefix("+") ? Color.white.opacity(0.06) : .clear)
+                        .background(line.hasPrefix("+") ? Color.white.opacity(Lift.inset) : .clear)
                 }
             }
             .padding(.vertical, 6)
         }
         .frame(maxHeight: 180)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.25)))
+        .background(RoundedRectangle(cornerRadius: Radius.control).fill(Color.black.opacity(0.25)))
     }
 }

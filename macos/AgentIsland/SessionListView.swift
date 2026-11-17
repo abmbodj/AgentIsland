@@ -1,19 +1,13 @@
 import SwiftUI
 
-private let ink = Color(nsColor: Theme.ink)
-private let secondary = Color(nsColor: Theme.secondary)
-private let muted = Color(nsColor: Theme.muted)
-private let amber = Color(nsColor: Theme.amber)
-private let green = Color(nsColor: Theme.green)
-
 struct SessionListView: View {
     @ObservedObject var model: PanelModel
     @FocusState private var searchFocused: Bool
-    /// Measured so the rows get whatever height the card and usage strip leave, and scroll past that.
+    /// Measured so the rows get whatever height the card, header and usage footer leave, and scroll past that.
     @State private var cardHeight: CGFloat = 0
     @State private var headerHeight: CGFloat = 0
     @State private var rowsHeight: CGFloat = 0
-    @State private var stripHeight: CGFloat = 0
+    @State private var footerHeight: CGFloat = 0
     private static let activityPreview = 4
     private static let projectPreview = 3
     fileprivate static let listViewport = "session list viewport"
@@ -21,7 +15,7 @@ struct SessionListView: View {
     var body: some View {
         TimelineView(.periodic(from: model.isOpen ? .now : .distantFuture, by: 1)) { ctx in
             // Panel padding is 4 top + 10 bottom. Keep room to browse even with a long request.
-            let available = max(0, model.listHeightLimit - 14 - headerHeight - stripHeight)
+            let available = max(0, model.listHeightLimit - 14 - headerHeight - footerHeight)
             let cardViewport = min(cardHeight, available - min(72, available / 3))
             let room = available - cardViewport
             VStack(alignment: .leading, spacing: 0) {
@@ -48,12 +42,9 @@ struct SessionListView: View {
                     .onAppear { restoreSearchPosition(proxy) }
                     .onChange(of: model.searchSelection) { _, _ in restoreSearchPosition(proxy) }
                 }
-                HStack(alignment: .center, spacing: 8) {
-                    UsageStrip(usage: model.snapshot.usage, now: ctx.date)
-                    Spacer(minLength: 0)
-                    NewChatButton(model: model).padding(.top, 8)
-                }
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stripHeight = $0 }
+                model.usageFooter(now: ctx.date)
+                    .padding(.top, 6)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
             }
         }
         .staticDetailWhenReduced()
@@ -72,12 +63,15 @@ struct SessionListView: View {
                     Image(systemName: "chevron.left")
                         .frame(width: 26, height: 26)
                 }
-                .buttonStyle(IslandButtonStyle(radius: 6))
+                .buttonStyle(IslandButtonStyle(radius: Radius.chip))
                 .accessibilityLabel("Back")
             }
             switch model.listRoute {
             case .activity:
-                Text("Sessions").fontWeight(.semibold)
+                Text("Sessions").font(.system(size: 13, weight: .semibold))
+                Text(activitySummary).foregroundStyle(secondary).monospacedDigit()
+                    .padding(.leading, 4)
+                    .contentTransition(.numericText())
             case .waiting:
                 Text("Needs input (\(model.sessionList.waiting.count))").fontWeight(.semibold)
             case .running:
@@ -100,15 +94,25 @@ struct SessionListView: View {
                 Button { model.startSearch() } label: {
                     Image(systemName: "magnifyingglass").frame(width: 26, height: 26)
                 }
-                .buttonStyle(IslandButtonStyle(radius: 6))
+                .buttonStyle(IslandButtonStyle(radius: Radius.chip))
                 .accessibilityLabel("Search chats")
                 .help("Search chats (⌘F)")
+                if model.listRoute == .activity { NewChatButton(model: model) }
             }
         }
         .font(.system(size: 12))
         .foregroundStyle(Color(nsColor: Theme.ink))
         .frame(minHeight: 30)
         .padding(.horizontal, 8)
+    }
+
+    /// What is running at a glance; counts come from the same lists the rows below show.
+    private var activitySummary: String {
+        let list = model.sessionList
+        let active = list.waiting.count + list.running.count
+        var parts = [active == 0 ? "Nothing running" : "\(active) active"]
+        if !list.waiting.isEmpty { parts.append("\(list.waiting.count) need\(list.waiting.count == 1 ? "s" : "") you") }
+        return parts.joined(separator: " · ")
     }
 
     private func focusSearch() {
@@ -189,7 +193,7 @@ struct SessionListView: View {
             .frame(minHeight: 25)
             .contentShape(Rectangle())
         }
-        .buttonStyle(IslandButtonStyle(radius: 6))
+        .buttonStyle(IslandButtonStyle(radius: Radius.chip))
     }
 
     @ViewBuilder
@@ -213,7 +217,7 @@ struct SessionListView: View {
             .frame(minHeight: 28)
             .contentShape(Rectangle())
         }
-        .buttonStyle(IslandButtonStyle(radius: 6))
+        .buttonStyle(IslandButtonStyle(radius: Radius.chip))
         .accessibilityLabel("\(group.project.name), \(group.entries.count) \(group.entries.count == 1 ? "chat" : "chats")\(group.project.hint.map { ", " + $0 } ?? "")")
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
         if expanded {
@@ -336,7 +340,7 @@ private struct SessionRow: View {
                                 .foregroundStyle(open ? ink : secondary)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 1)
-                                .background(Capsule().fill(Color.white.opacity(open ? 0.14 : 0.07)))
+                                .background(Capsule().fill(Color.white.opacity(open ? Lift.selected : Lift.block)))
                         }
                         .buttonStyle(.plain)
                         .help(open ? "Hide subagents" : "Show subagents")
@@ -347,8 +351,8 @@ private struct SessionRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(selected || hover ? 0.07 : 0)))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(secondary.opacity(selected ? 0.6 : 0), lineWidth: 1).allowsHitTesting(false))
+        .background(RoundedRectangle(cornerRadius: Radius.row).fill(Color.white.opacity(selected || hover ? Lift.block : 0)))
+        .overlay(RoundedRectangle(cornerRadius: Radius.row).strokeBorder(secondary.opacity(selected ? 0.6 : 0), lineWidth: 1).allowsHitTesting(false))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         // A plain tap, nothing beside it: a simultaneous press-tint DragGesture swallowed the tap on the never-key panel.
@@ -410,41 +414,5 @@ private struct SubagentRow: View {
         .padding(.trailing, 10)
         .padding(.vertical, 4)
         .opacity(sub.done ? 0.6 : 1)
-    }
-}
-
-/// One quiet line: last reported limits, never extrapolated; hidden when nothing reliable exists.
-private struct UsageStrip: View {
-    let usage: Usage
-    let now: Date
-
-    var body: some View {
-        let agents = [("claude", usage.claude), ("codex", usage.codex)].compactMap { n, u in u.map { (n, $0) } }
-        if !agents.isEmpty {
-            HStack(spacing: 14) {
-                ForEach(agents, id: \.0) { agent, u in
-                    HStack(spacing: 6) {
-                        AgentMark(agent: agent, size: 11)
-                        ForEach(u.windows, id: \.label) { w in
-                            let remainingPercent = min(100, max(0, 100 - w.usedPercent))
-                            Text("\(w.label) \(Int(remainingPercent.rounded()))%")
-                                .fontWeight(remainingPercent <= 10 ? .bold : .regular)
-                                .foregroundStyle(remainingPercent <= 10 ? ink : secondary)
-                            + Text(" · \(Fmt.until(w.resetsAt, now: now))").foregroundStyle(muted)
-                        }
-                        if now.timeIntervalSince1970 * 1000 - Double(u.observedAt) > 15 * 60 * 1000 {
-                            Text("as of \(Fmt.elapsed(u.observedAt, now: now)) ago").foregroundStyle(muted)
-                        }
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-            .font(.system(size: 11).monospacedDigit())
-            .lineLimit(1)
-            .padding(.horizontal, 10)
-            .padding(.top, 8)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Usage remaining")
-        }
     }
 }

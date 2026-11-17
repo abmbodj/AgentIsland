@@ -37,7 +37,7 @@ struct DiffView: View {
         }
         .frame(maxHeight: 220)
         .background(Color(nsColor: .textBackgroundColor).opacity(0.6))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.chip))
     }
 
     private func color(_ l: Substring) -> Color {
