@@ -308,6 +308,7 @@ private struct SessionRow: View {
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(muted)
                         .frame(minWidth: 26, alignment: .trailing)
+                        .fixedSize()
                 }
                 if let detail {
                     Text(detail)

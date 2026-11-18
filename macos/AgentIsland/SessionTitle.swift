@@ -30,6 +30,7 @@ struct SessionTitle: View {
                 titleButton("pencil", label: "Rename session") { model.editTitle(keys: keys, title: title) }
                     .opacity(revealed ? 1 : 0)
                     .allowsHitTesting(revealed)
+                    .disabled(!revealed) // not a keyboard stop while hidden
                     .accessibilityHidden(!revealed)
             }
         }

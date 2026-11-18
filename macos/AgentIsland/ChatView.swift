@@ -1273,6 +1273,7 @@ struct ChatRow: View {
                     .buttonStyle(IslandButtonStyle(radius: Radius.chip))
                     .opacity(hover ? 1 : 0)
                     .allowsHitTesting(hover)
+                    .disabled(!hover) // not a keyboard stop while hidden
                     .accessibilityHidden(true) // offered as an action on the row instead
                     .help("Delete this chat")
                 }

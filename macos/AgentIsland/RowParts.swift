@@ -77,6 +77,8 @@ struct StatusPill: View {
         .frame(height: 20)
         .background(Capsule().fill(status.tone == .quiet ? Color.clear
                                    : status.tone == .active ? Color.white.opacity(Lift.block) : tint.opacity(0.13)))
+        // A long title truncates; the state never does.
+        .fixedSize()
         .keyframeAnimator(initialValue: 1.0, trigger: announce) { content, scale in
             content.scaleEffect(scale)
         } keyframes: { _ in
