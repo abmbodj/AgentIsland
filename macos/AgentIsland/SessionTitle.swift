@@ -5,6 +5,8 @@ struct SessionTitle: View {
     @ObservedObject var model: PanelModel
     let keys: [String]
     let title: String
+    /// The rename pencil shows with its row's hover; Rename is also in the context menu and accessibility actions.
+    var revealed = true
     @FocusState private var focused: Bool
     private var editing: Bool { model.isEditingTitle(keys) }
 
@@ -24,8 +26,12 @@ struct SessionTitle: View {
                 titleButton("checkmark", label: "Save title") { model.saveTitle() }
                 titleButton("xmark", label: "Cancel rename") { model.editingTitle = nil }
             } else {
-                Text(title).lineLimit(1)
+                Text(title).lineLimit(1).truncationMode(.tail)
                 titleButton("pencil", label: "Rename session") { model.editTitle(keys: keys, title: title) }
+                    .opacity(revealed ? 1 : 0)
+                    .allowsHitTesting(revealed)
+                    .disabled(!revealed) // not a keyboard stop while hidden
+                    .accessibilityHidden(!revealed)
             }
         }
         .font(.system(size: 13, weight: .semibold))

@@ -1244,40 +1244,49 @@ struct ChatRow: View {
     let openRow: () -> Void
     @State private var hover = false
 
-    private var status: String {
+    private var status: RowStatus {
         switch state {
-        case .working: return "Working"
-        case .error: return "Failed"
-        case .needsInput: return "Needs your input"
-        default: return "Idle"
+        case .working: return RowStatus(label: "Working", tone: .active, glyph: .working)
+        case .error: return RowStatus(label: "Failed", tone: .quiet, glyph: .error)
+        case .needsInput: return RowStatus(label: "Needs you", tone: .attention, glyph: .needsInput)
+        default: return RowStatus(label: "Idle", tone: .quiet, glyph: .idle)
         }
     }
 
     var body: some View {
-        HStack(spacing: 10) {
-            AgentBadge(agent: chat.agent, state: state, size: 16).frame(width: 18, height: 18)
-            VStack(alignment: .leading, spacing: 2) {
-                SessionTitle(model: model, keys: model.titleKeys(chat), title: model.title(chat))
-                Text(status + (context.map { " · " + $0 } ?? "")).font(.system(size: 11))
-                    .foregroundStyle(state == .needsInput ? amber : secondary)
-                    .lineLimit(1).truncationMode(.middle)
+        HStack(alignment: .top, spacing: 10) {
+            AgentTile(agent: chat.agent).padding(.top, 1)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    SessionTitle(model: model, keys: model.titleKeys(chat), title: model.title(chat), revealed: hover)
+                        .layoutPriority(1)
+                    Spacer(minLength: 4)
+                    StatusPill(status: status, agent: chat.agent)
+                }
+                HStack(spacing: 6) {
+                    Image(systemName: "folder").font(.system(size: 9)).accessibilityHidden(true)
+                    Text(context ?? Fmt.path(chat.cwd)).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 6)
+                    Button { model.confirmingDelete = chat.id } label: {
+                        Image(systemName: "trash").font(.system(size: 11)).foregroundStyle(secondary).frame(width: 22, height: 20).contentShape(Rectangle())
+                    }
+                    .buttonStyle(IslandButtonStyle(radius: Radius.chip))
+                    .opacity(hover ? 1 : 0)
+                    .allowsHitTesting(hover)
+                    .disabled(!hover) // not a keyboard stop while hidden
+                    .accessibilityHidden(true) // offered as an action on the row instead
+                    .help("Delete this chat")
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(muted)
             }
-            Spacer(minLength: 8)
-            Button { model.confirmingDelete = chat.id } label: {
-                Image(systemName: "trash").font(.system(size: 12)).foregroundStyle(secondary).frame(width: 26, height: 26).contentShape(Rectangle())
-            }
-            .buttonStyle(IslandButtonStyle(radius: Radius.chip))
-            .opacity(hover ? 1 : 0)
-            .animation(Motion.feedback(reduceMotion: reduceMotion), value: hover)
-            .accessibilityHidden(true) // offered as an action on the row instead
-            .help("Delete this chat")
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.vertical, 9)
         .background(RoundedRectangle(cornerRadius: Radius.row).fill(Color.white.opacity(selected || hover ? Lift.block : 0)))
         .overlay(RoundedRectangle(cornerRadius: Radius.row).strokeBorder(secondary.opacity(selected ? 0.6 : 0), lineWidth: 1).allowsHitTesting(false))
         .contentShape(Rectangle())
-        .onHover { hover = $0 }
+        .onHover { h in withAnimation(Motion.feedback(reduceMotion: reduceMotion)) { hover = h } }
         .onTapGesture { if model.editingTitle == nil { openRow() } }
         .contextMenu {
             Button("Rename session") { model.editTitle(keys: model.titleKeys(chat), title: model.title(chat)) }

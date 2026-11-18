@@ -291,77 +291,103 @@ private struct SessionRow: View {
     let openRow: () -> Void
     @State private var hover = false
 
-    private var status: (String, Color) {
-        switch state {
-        case .working: return (session.activity.isEmpty ? "Working" : session.activity, secondary)
-        case .needsInput: return ("Needs your input", amber)
-        case .finished: return ("Done", green)
-        case .idle: return ("Idle", secondary)
-        case .ended: return ("Ended", muted)
-        case .error: return ("Exited unexpectedly", muted)
-        case .stale: return ("No activity for 30m", muted)
+    // Split into small pieces: as one expression the row body timed out the CI compiler's type checker.
+    private var openHint: String {
+        if model.chatFor(session) != nil || session.transcriptPath != nil { return "Opens this conversation" }
+        return session.hasPlan ? "Opens this session’s plan" : "Shows this session's terminal"
+    }
+
+    private var rowContent: some View {
+        HStack(alignment: .top, spacing: 10) {
+            AgentTile(agent: session.agent).padding(.top, 1)
+            VStack(alignment: .leading, spacing: 3) {
+                titleLine
+                detailLine
+                folderLine
+            }
         }
     }
 
-    var body: some View {
-        let open = model.openGroups.contains(session.key)
-        let running = session.subagents.filter { !$0.done }.count
-        HStack(alignment: .center, spacing: 10) {
-            AgentBadge(agent: session.agent, state: state, size: 16)
-                .frame(width: 18, height: 18)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    SessionTitle(model: model, keys: model.titleKeys(session), title: model.title(session))
-                    Spacer(minLength: 8)
+    private var titleLine: some View {
+        HStack(spacing: 8) {
+                    SessionTitle(model: model, keys: model.titleKeys(session), title: model.title(session), revealed: hover)
+                        .layoutPriority(1)
+                    Spacer(minLength: 4)
+                    StatusPill(status: RowStatus(session, state: state), agent: session.agent)
                     Text(Fmt.elapsed(session.since, now: now))
                         .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(secondary)
-                }
-                HStack(spacing: 6) {
-                    Text(model.hint[session.id] ?? status.0)
-                        .font(.system(size: 11, weight: state == .needsInput ? .medium : .regular))
-                        .foregroundStyle(model.hint[session.id] == nil ? status.1 : muted)
+                        .foregroundStyle(muted)
+                        .frame(minWidth: 26, alignment: .trailing)
+                        .fixedSize()
+        }
+    }
+
+    @ViewBuilder private var detailLine: some View {
+        if let detail = model.hint[session.id] ?? RowStatus.detail(session, state: state) {
+                    Text(detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(model.hint[session.id] == nil ? secondary : muted)
                         .lineLimit(1)
-                        .truncationMode(.middle)
-                    if let context {
-                        Text(context).font(.system(size: 11)).foregroundStyle(secondary)
-                            .lineLimit(1).truncationMode(.middle)
-                    }
-                    Spacer(minLength: 8)
+                        .truncationMode(.tail)
+                        .contentTransition(.opacity)
+                        .animation(Motion.feedback(reduceMotion: reduceMotion), value: detail)
+        }
+    }
+
+    private var folderLine: some View {
+        HStack(spacing: 6) {
+                    Image(systemName: "folder").font(.system(size: 9)).accessibilityHidden(true)
+                    Text(context ?? Fmt.path(session.cwd)).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 6)
                     PRButton(model: model, session: session)
-                    if !session.subagents.isEmpty {
-                        Button {
+                    if !session.subagents.isEmpty { subagentToggle }
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(muted)
+    }
+
+    private var subagentToggle: some View {
+        let open = model.openGroups.contains(session.key)
+        let running = session.subagents.filter { !$0.done }.count
+        return Button {
                             withAnimation(Motion.detail(reduceMotion: reduceMotion)) {
                                 if open { model.openGroups.remove(session.key) } else { model.openGroups.insert(session.key) }
                             }
                         } label: {
-                            Text("↳ \(running > 0 ? running : session.subagents.count)")
-                                .font(.system(size: 11, weight: .medium).monospacedDigit())
-                                .foregroundStyle(open ? ink : secondary)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 1)
-                                .background(Capsule().fill(Color.white.opacity(open ? Lift.selected : Lift.block)))
+                            HStack(spacing: 4) {
+                                Text(running > 0 ? "\(running) subagent\(running == 1 ? "" : "s") running"
+                                     : "\(session.subagents.count) subagent\(session.subagents.count == 1 ? "" : "s")")
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 8, weight: .semibold))
+                                    .rotationEffect(.degrees(open ? 90 : 0))
+                            }
+                            .font(.system(size: 11, weight: .medium).monospacedDigit())
+                            .foregroundStyle(open ? ink : secondary)
+                            .padding(.horizontal, 7)
+                            .frame(height: 20)
+                            .background(Capsule().fill(Color.white.opacity(open ? Lift.selected : Lift.block)))
+                            .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
                         .help(open ? "Hide subagents" : "Show subagents")
-                        .accessibilityLabel("\(session.subagents.count) subagents")
-                    }
-                }
-            }
-        }
+                        .accessibilityLabel("\(session.subagents.count) subagents, \(running) running")
+    }
+
+    var body: some View {
+        rowContent
         .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.vertical, 9)
         .background(RoundedRectangle(cornerRadius: Radius.row).fill(Color.white.opacity(selected || hover ? Lift.block : 0)))
         .overlay(RoundedRectangle(cornerRadius: Radius.row).strokeBorder(secondary.opacity(selected ? 0.6 : 0), lineWidth: 1).allowsHitTesting(false))
         .contentShape(Rectangle())
-        .onHover { hover = $0 }
+        .onHover { h in withAnimation(Motion.feedback(reduceMotion: reduceMotion)) { hover = h } }
         // A plain tap, nothing beside it: a simultaneous press-tint DragGesture swallowed the tap on the never-key panel.
         .onTapGesture { if model.editingTitle == nil { openRow() } }
         .accessibilityElement(children: model.isEditingTitle(model.titleKeys(session)) ? .contain : .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityAction { if model.editingTitle == nil { openRow() } }
-        .accessibilityHint(model.chatFor(session) != nil || session.transcriptPath != nil ? "Opens this conversation" : session.hasPlan ? "Opens this session’s plan" : "Shows this session's terminal")
+        .accessibilityHint(openHint)
         .contextMenu {
             Button("Rename session") { model.editTitle(keys: model.titleKeys(session), title: model.title(session)) }
             if let c = model.chatFor(session) { Button("Delete chat") { model.confirmingDelete = c.id } }
@@ -410,7 +436,7 @@ private struct SubagentRow: View {
                 .font(.system(size: 11).monospacedDigit())
                 .foregroundStyle(muted)
         }
-        .padding(.leading, 48)
+        .padding(.leading, 50)
         .padding(.trailing, 10)
         .padding(.vertical, 4)
         .opacity(sub.done ? 0.6 : 1)

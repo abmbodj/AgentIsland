@@ -1111,10 +1111,15 @@ fn basename(path: &Value) -> &str {
     path.as_str().unwrap_or_default().rsplit('/').next().unwrap_or_default()
 }
 
-/// "Editing auth.ts", "Running `npm test`", ...
+/// "Editing auth.ts", "Run the test suite" (Claude's own command description), "Running `npm test`", ...
 pub fn activity_label(tool: &str, input: &Value) -> String {
     match tool {
         "Bash" => {
+            // Claude writes a plain-language description of each command; it reads better than the raw command.
+            let described = input["description"].as_str().unwrap_or_default().lines().next().unwrap_or_default().trim();
+            if !described.is_empty() {
+                return described.to_string();
+            }
             let cmd = input["command"].as_str().unwrap_or_default().lines().next().unwrap_or_default();
             const MAX: usize = 32;
             if cmd.chars().count() > MAX {

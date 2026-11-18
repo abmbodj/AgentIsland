@@ -72,7 +72,7 @@ fn prompt_submit_starts_a_working_turn() {
 fn tool_use_sets_a_human_activity_label() {
     let mut s = store_with_session();
     s.handle(&claude("PreToolUse-Bash", json!({})), T0 + 5);
-    assert_eq!(only(&s).activity, "Running `touch hello.txt`");
+    assert_eq!(only(&s).activity, "Create empty hello.txt file");
     s.handle(&claude("PreToolUse-Bash", json!({"tool_name":"Edit","tool_input":{"file_path":"/x/src/auth.ts"}})), T0 + 6);
     assert_eq!(only(&s).activity, "Editing auth.ts");
     s.handle(&claude("PreToolUse-Bash", json!({"tool_name":"Read","tool_input":{"file_path":"/x/README.md"}})), T0 + 7);
@@ -81,6 +81,13 @@ fn tool_use_sets_a_human_activity_label() {
     assert_eq!(only(&s).activity, "Searching");
     s.handle(&claude("PreToolUse-Agent", json!({})), T0 + 9);
     assert_eq!(only(&s).activity, "Delegating to Explore");
+}
+
+#[test]
+fn bash_without_a_description_falls_back_to_the_command() {
+    let mut s = store_with_session();
+    s.handle(&claude("PreToolUse-Bash", json!({"tool_input":{"command":"npm test","description":"  "}})), T0 + 5);
+    assert_eq!(only(&s).activity, "Running `npm test`");
 }
 
 #[test]
@@ -342,7 +349,7 @@ fn subagents_nest_under_their_parent_and_fade_after_stopping() {
     let sess = only(&s);
     assert_eq!(sess.subagents.len(), 1);
     assert_eq!(sess.subagents[0].kind, "Explore");
-    assert!(sess.subagents[0].activity.starts_with("Running `find"));
+    assert_eq!(sess.subagents[0].activity, "List all files excluding .git internals");
     assert_eq!(sess.activity, "Delegating to Explore", "subagent tools must not relabel the parent");
 
     s.handle(&claude("SubagentStop", json!({})), T0 + 4);
